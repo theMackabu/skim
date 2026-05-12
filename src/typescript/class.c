@@ -238,7 +238,12 @@ static size_t skip_decorator_line(const char *src, size_t len, size_t i) {
   if (i >= len || src[i] != '@') return i;
   i++;
   i = skim_skip_ws(src, len, i);
-  if (i < len && src[i] == '(') return skim_skip_balanced(src, len, i, '(', ')');
+  if (i < len && src[i] == '(') {
+    i = skim_skip_balanced(src, len, i, '(', ')');
+    size_t call = skim_skip_ws(src, len, i);
+    if (call < len && src[call] == '(') i = skim_skip_balanced(src, len, call, '(', ')');
+    return i;
+  }
 
   size_t start = 0, end = 0;
   i = skim_parse_identifier(src, len, i, &start, &end);
@@ -248,9 +253,29 @@ static size_t skip_decorator_line(const char *src, size_t len, size_t i) {
     size_t j = skim_skip_ws(src, len, i);
     if (range_has_newline(src, i, j)) break;
     if (j >= len) break;
+    if (src[j] == '<') {
+      i = skip_class_angle_type_list(src, len, j);
+      continue;
+    }
+    if (src[j] == '!') {
+      i = j + 1;
+      continue;
+    }
     if (src[j] == '.') {
       size_t next_start = 0, next_end = 0;
       size_t next = skim_parse_identifier(src, len, j + 1, &next_start, &next_end);
+      if (next_start == next_end) break;
+      i = next;
+      continue;
+    }
+    if (j + 1 < len && src[j] == '?' && src[j + 1] == '.') {
+      size_t next = j + 2;
+      if (next < len && src[next] == '[') {
+        i = skim_skip_balanced(src, len, next, '[', ']');
+        continue;
+      }
+      size_t next_start = 0, next_end = 0;
+      next = skim_parse_identifier(src, len, next, &next_start, &next_end);
       if (next_start == next_end) break;
       i = next;
       continue;
@@ -622,6 +647,36 @@ static bool next_looks_like_class_member(const char *src, size_t len, size_t i, 
   return after < len && (after < end || src[after] == '}');
 }
 
+static void emit_decorator_range(skim_str_t *out, const char *src, size_t len, size_t start, size_t end) {
+  for (size_t i = start; i < end;) {
+    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
+      i = skim_copy_string(out, src, len, i);
+      continue;
+    }
+    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
+      i = skim_copy_line_comment(out, src, len, i);
+      continue;
+    }
+    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
+      i = skim_copy_block_comment(out, src, len, i);
+      continue;
+    }
+    if (src[i] == '<') {
+      size_t after = skip_class_angle_type_list(src, len, i);
+      if (after > i && after <= end) {
+        i = after;
+        continue;
+      }
+    }
+    if (src[i] == '!' && (i + 1 >= len || src[i + 1] != '=')) {
+      i++;
+      continue;
+    }
+    if (src[i] != '@' && skim_transform_try_at(out, src, len, &i)) continue;
+    skim_str_putc(out, src[i++]);
+  }
+}
+
 static void emit_preserved_class_member_prefix(
   skim_str_t *out,
   const char *src,
@@ -630,17 +685,19 @@ static void emit_preserved_class_member_prefix(
   size_t decorators_end,
   size_t member_prefix_start,
   bool saw_static,
+  bool saw_override,
   bool saw_accessor
 ) {
   size_t leading = start;
   if (decorators_end > start) {
-    skim_transform_range(src, len, start, decorators_end, out);
+    emit_decorator_range(out, src, len, start, decorators_end);
     leading = decorators_end;
   }
   while (leading < member_prefix_start && isspace((unsigned char)src[leading])) {
     skim_str_putc(out, src[leading++]);
   }
   if (saw_static) skim_str_puts(out, "static ");
+  if (saw_override && saw_accessor) skim_str_puts(out, "override ");
   if (saw_accessor) skim_str_puts(out, "accessor ");
 }
 
@@ -652,6 +709,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
   bool saw_abstract = false;
   bool saw_declare = false;
   bool saw_static = false;
+  bool saw_override = false;
   bool saw_accessor = false;
   bool saw_erased_modifier = false;
   for (;;) {
@@ -673,6 +731,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     saw_abstract = saw_abstract || is_abstract;
     saw_declare = saw_declare || strcmp(mod, "declare") == 0;
     saw_static = saw_static || strcmp(mod, "static") == 0;
+    saw_override = saw_override || strcmp(mod, "override") == 0;
     saw_accessor = saw_accessor || strcmp(mod, "accessor") == 0;
     saw_erased_modifier = saw_erased_modifier || (strcmp(mod, "static") != 0 && strcmp(mod, "accessor") != 0);
     j += mod_len;
@@ -827,7 +886,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     }
     if (j < end && src[j] == '{') {
       emit_preserved_class_member_prefix(
-        out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_accessor
+        out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
       );
       size_t prefix_end = member_name_end;
       while (prefix_end > member_prefix_start && isspace((unsigned char)src[prefix_end - 1]))
@@ -874,7 +933,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         if (stmt_end > end) stmt_end = end;
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -892,7 +951,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         }
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -911,7 +970,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         }
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -929,7 +988,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         }
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -947,12 +1006,16 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
   } else if (saw_erased_modifier && j < end && src[j] == '=') {
     size_t stmt_end = skim_skip_statement_like(src, len, j);
     if (stmt_end > end) stmt_end = end;
-    emit_preserved_class_member_prefix(out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_accessor);
+    emit_preserved_class_member_prefix(
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+    );
     skim_transform_range(src, len, member_prefix_start, stmt_end, out);
     *io = stmt_end;
     return true;
   } else if (saw_erased_modifier && (j >= end || src[j] == ';' || src[j] == '\n' || src[j] == '\r' || src[j] == '}')) {
-    emit_preserved_class_member_prefix(out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_accessor);
+    emit_preserved_class_member_prefix(
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+    );
     skim_transform_range(src, len, member_prefix_start, member_name_end, out);
     if (j < end && src[j] == ';') {
       skim_str_putc(out, ';');
@@ -961,7 +1024,9 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     *io = j;
     return true;
   } else if (saw_accessor && (j >= end || src[j] == ';' || src[j] == '\n' || src[j] == '\r' || src[j] == '}')) {
-    emit_preserved_class_member_prefix(out, src, len, i, decorators_end, member_prefix_start, saw_static, true);
+    emit_preserved_class_member_prefix(
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, true
+    );
     skim_transform_range(src, len, member_prefix_start, member_name_end, out);
     if (j < end && src[j] == ';') {
       skim_str_putc(out, ';');
@@ -972,7 +1037,9 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
   } else if (saw_accessor && j < end && src[j] == '=') {
     size_t stmt_end = skim_skip_statement_like(src, len, j);
     if (stmt_end > end) stmt_end = end;
-    emit_preserved_class_member_prefix(out, src, len, i, decorators_end, member_prefix_start, saw_static, true);
+    emit_preserved_class_member_prefix(
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, true
+    );
     skim_transform_range(src, len, member_prefix_start, stmt_end, out);
     *io = stmt_end;
     return true;
@@ -1163,7 +1230,7 @@ static void emit_class_header(
   if (prefix->is_export) skim_str_puts(out, "export ");
   if (prefix->is_default) skim_str_puts(out, "default ");
   if (prefix->has_decorators) {
-    transform_class_body_range(src, len, prefix->decorators_start, prefix->decorators_end, out);
+    emit_decorator_range(out, src, len, prefix->decorators_start, prefix->decorators_end);
     skim_str_putc(out, ' ');
   }
   skim_str_putn(out, src + class_word, 5);
@@ -1250,7 +1317,7 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
   param_t *params = NULL;
   size_t count = 0;
   size_t item_start = start;
-  int paren = 0, bracket = 0, brace = 0;
+  int paren = 0, bracket = 0, brace = 0, angle = 0;
   for (size_t i = start; i <= end; i++) {
     char c = i < end ? src[i] : ',';
     if (i < end && (c == '\'' || c == '"' || c == '`')) {
@@ -1263,7 +1330,9 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
     else if (c == ']' && bracket > 0) bracket--;
     else if (c == '{') brace++;
     else if (c == '}' && brace > 0) brace--;
-    if (paren || bracket || brace || c != ',') continue;
+    else if (c == '<') angle++;
+    else if (c == '>' && angle > 0) angle--;
+    if (paren || bracket || brace || angle || c != ',') continue;
 
     size_t a = skim_skip_ws(src, len, item_start);
     size_t b = i;
@@ -1273,6 +1342,17 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
       bool is_prop = false;
       const char *mod = NULL;
       size_t mod_len = 0;
+      size_t decorators_start = a;
+      size_t decorators_end = a;
+      for (;;) {
+        a = skim_skip_ws(src, len, a);
+        if (a >= b || src[a] != '@') break;
+        size_t after = skip_decorator_line(src, len, a);
+        if (after <= a || after > b) break;
+        decorators_end = after;
+        a = after;
+      }
+      a = skim_skip_ws(src, len, a);
       for (;;) {
         size_t m = skim_skip_ws(src, len, a);
         if (!modifier_at(src, len, m, &mod, &mod_len)) break;
@@ -1307,6 +1387,10 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
         }
 
         skim_str_t param = {0};
+        if (decorators_end > decorators_start) {
+          emit_decorator_range(&param, src, len, decorators_start, decorators_end);
+          skim_str_putc(&param, ' ');
+        }
         skim_str_putn(&param, src + name_start, name_end - name_start);
         if (init < b && src[init] == '=') {
           skim_str_putc(&param, ' ');

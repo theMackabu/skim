@@ -69,7 +69,6 @@ function shouldSkipSource(text) {
   if (/^\s*\/\/\s*@jsx:/m.test(text)) return 'jsx option';
   if (/^\s*\/\/\s*@allowJs:/m.test(text)) return 'allowJs';
   if (/^\s*\/\/\s*@checkJs:/m.test(text)) return 'checkJs';
-  if (/^\s*\/\/\s*@noTypesAndSymbols:/m.test(text)) return 'noTypesAndSymbols';
   if (/^\s*\/\/\s*@filename:/im.test(text)) return 'multifile harness';
   if (/^\s*\/\/\s*@declaration:/m.test(text)) return 'declaration emit';
   return '';

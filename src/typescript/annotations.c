@@ -82,8 +82,47 @@ static size_t skip_type_tail(const char *src, size_t len, size_t i) {
   return skip_type_tail_impl(src, len, i, false);
 }
 
+static size_t find_top_level_arrow(const char *src, size_t len, size_t i, size_t end) {
+  int paren = 0, bracket = 0, brace = 0, angle = 0;
+  while (i + 1 < len && i < end) {
+    char c = src[i];
+    if (c == '\'' || c == '"' || c == '`') {
+      i = skim_skip_string_raw(src, len, i);
+      continue;
+    }
+    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
+      while (i < len && src[i] != '\n')
+        i++;
+      continue;
+    }
+    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
+        i++;
+      if (i + 1 < len) i += 2;
+      continue;
+    }
+    if (c == '=' && src[i + 1] == '>') {
+      if (paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i;
+      i += 2;
+      continue;
+    }
+    if (c == '(') paren++;
+    else if (c == ')' && paren > 0) paren--;
+    else if (c == '[') bracket++;
+    else if (c == ']' && bracket > 0) bracket--;
+    else if (c == '{') brace++;
+    else if (c == '}' && brace > 0) brace--;
+    else if (c == '<') angle++;
+    else if (c == '>' && angle > 0) angle--;
+    i++;
+  }
+  return end;
+}
+
 static size_t skip_return_type_tail(const char *src, size_t len, size_t i) {
-  return skip_type_tail_impl(src, len, i, true);
+  size_t end = skip_type_tail_impl(src, len, i, true);
+  return find_top_level_arrow(src, len, i, end);
 }
 
 static bool comma_looks_like_param_separator(const char *src, size_t comma);
@@ -990,7 +1029,9 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
     if (skim_word_at(src, len, after_colon, "function")) return false;
     size_t end =
       prev_non_ws_char(src, i) == ')' ? skip_return_type_tail(src, len, i + 1) : skip_type_tail(src, len, i + 1);
-    if (after_colon < len && src[after_colon] == '{' && colon_is_in_var_decl(src, i)) {
+    if (
+      after_colon < len && src[after_colon] == '{' && prev_non_ws_char(src, i) != ')' && colon_is_in_var_decl(src, i)
+    ) {
       end = skim_skip_balanced(src, len, after_colon, '{', '}');
       for (;;) {
         size_t next = skim_skip_ws(src, len, end);
