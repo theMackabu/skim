@@ -69,7 +69,7 @@ static void print_usage(FILE *f, const char *argv0) {
 }
 
 static const cli_option_t *find_option(const char *arg) {
-  for (size_t i = 0; i < sizeof(cli_options) / sizeof(cli_options[0]); i++) 
+  for (size_t i = 0; i < sizeof(cli_options) / sizeof(cli_options[0]); i++)
     if (strcmp(arg, cli_options[i].name) == 0) return &cli_options[i];
   return NULL;
 }
@@ -127,29 +127,30 @@ static char *read_file(const char *path, size_t *out_len) {
     fprintf(stderr, "open %s: %s\n", path, strerror(errno));
     exit(1);
   }
-  
+
   if (fseek(f, 0, SEEK_END) != 0) {
     fprintf(stderr, "fseek failed\n");
     exit(1);
   }
-  
+
   long size = ftell(f);
   if (size < 0) {
     fprintf(stderr, "ftell failed\n");
     exit(1);
   }
-  
+
   rewind(f);
   char *data = malloc((size_t)size + 1);
   if (!data) {
     fprintf(stderr, "out of memory\n");
     exit(1);
   }
-  
+
   size_t n = fread(data, 1, (size_t)size, f);
-  fclose(f); data[n] = '\0';
+  fclose(f);
+  data[n] = '\0';
   *out_len = n;
-  
+
   return data;
 }
 
@@ -161,25 +162,32 @@ int main(int argc, char **argv) {
 
   size_t len = 0;
   char *src = read_file(args.path, &len);
-  
+
   size_t out_len = 0;
   skim_error_t error = SKIM_OK;
   char error_buf[256] = {0};
-  
-  char *out = skim_strip_typescript_owned(
-    src, len, args.path, true, &args.options, 
-    &out_len, &error, error_buf, sizeof(error_buf)
+
+  skim_context_t ctx = {0};
+  if (skim_context_init(&ctx) != 0) {
+    fprintf(stderr, "out of memory\n");
+    free(src);
+    return 1;
+  }
+
+  const char *out = skim_strip_typescript_borrowed(
+    &ctx, src, len, args.path, SKIM_SOURCE_AUTO, &args.options, &out_len, &error, error_buf, sizeof(error_buf)
   );
-  
+
   if (!out) {
     fprintf(stderr, "%s\n", error_buf[0] ? error_buf : "failed to strip TypeScript");
+    skim_context_deinit(&ctx);
     free(src);
     return error == SKIM_OK ? 1 : -(int)error;
   }
-  
+
   fwrite(out, 1, out_len, stdout);
-  skim_free(out);
+  skim_context_deinit(&ctx);
   free(src);
-  
+
   return 0;
 }

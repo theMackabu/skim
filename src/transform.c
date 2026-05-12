@@ -5,7 +5,12 @@
 #include <string.h>
 
 skim_options_t skim_options;
+skim_source_mode_t skim_source_mode = SKIM_SOURCE_MODULE;
 static size_t transform_depth;
+
+static bool source_mode_needs_module_marker(void) {
+  return skim_source_mode == SKIM_SOURCE_MODULE;
+}
 
 static bool cleanup_is_assignment_equal(const char *src, size_t len, size_t i) {
   if (src[i] != '=') return false;
@@ -88,11 +93,13 @@ static size_t cleanup_copy_block_comment(skim_str_t *out, const char *src, size_
   return i;
 }
 
-static void cleanup_output_spacing(skim_str_t *out) {
+static void cleanup_output_spacing(skim_str_t *out, skim_str_t *scratch) {
   if (!out->data || out->len == 0) return;
   const char *src = out->data;
   size_t len = out->len;
-  skim_str_t cleaned = {0};
+  skim_str_t cleaned = scratch ? *scratch : (skim_str_t){0};
+  cleaned.len = 0;
+  if (cleaned.data) cleaned.data[0] = '\0';
   skim_str_reserve(&cleaned, len + 1);
 
   size_t i = cleanup_skip_ws(src, len, 0);
@@ -166,44 +173,50 @@ static void cleanup_output_spacing(skim_str_t *out) {
 
   cleanup_trim_trailing_horizontal_space(&cleaned);
   if (cleaned.len > 0 && cleaned.data[cleaned.len - 1] != '\n') skim_str_putc(&cleaned, '\n');
-  free(out->data);
+  if (scratch) *scratch = *out;
+  else free(out->data);
   *out = cleaned;
 }
 
-char *skim_transform_typescript_len(const char *src, size_t len, size_t *out_len) {
+void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out, skim_str_t *scratch) {
   bool root_transform = transform_depth++ == 0;
   if (root_transform) {
     skim_decl_reset();
     skim_ts_enum_reset();
     skim_ts_namespace_reset();
   }
-  skim_str_t out = {0};
-  skim_str_reserve(&out, len + 128);
+  out->len = 0;
+  if (out->data) out->data[0] = '\0';
+  skim_str_reserve(out, len + 128);
   skim_ast_program_t program = {0};
   skim_parse_program(&program, src, len);
-  skim_ast_print_program(&program, &out);
+  skim_ast_print_program(&program, out);
   skim_ast_free_program(&program);
   if (
-    !skim_has_module_syntax(out.data ? out.data : "", out.len) &&
+    source_mode_needs_module_marker() && !skim_has_module_syntax(out->data ? out->data : "", out->len) &&
     (skim_has_erasable_import_syntax(src, len) || skim_has_export_declare(src, len) ||
      skim_has_type_only_module_syntax(src, len))
   ) {
-    if (skim_has_effective_code(out.data ? out.data : "", out.len)) skim_str_putc(&out, '\n');
+    if (skim_has_effective_code(out->data ? out->data : "", out->len)) skim_str_putc(out, '\n');
     else {
-      free(out.data);
-      out.data = NULL;
-      out.len = 0;
-      out.cap = 0;
+      out->len = 0;
+      if (out->data) out->data[0] = '\0';
     }
-    skim_str_puts(&out, "export {};\n");
+    skim_str_puts(out, "export {};\n");
   }
-  if (root_transform) cleanup_output_spacing(&out);
+  if (root_transform) cleanup_output_spacing(out, scratch);
   transform_depth--;
   if (root_transform) {
     skim_ts_enum_reset();
     skim_ts_namespace_reset();
     skim_decl_reset();
   }
+  if (!out->data) skim_str_reserve(out, 0);
+}
+
+char *skim_transform_typescript_len(const char *src, size_t len, size_t *out_len) {
+  skim_str_t out = {0};
+  skim_transform_typescript_into(src, len, &out, NULL);
   if (out_len) *out_len = out.len;
   return out.data ? out.data : skim_slice_dup("", 0, 0);
 }

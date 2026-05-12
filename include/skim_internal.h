@@ -15,6 +15,7 @@ typedef struct {
 } skim_source_t;
 
 extern skim_options_t skim_options;
+extern skim_source_mode_t skim_source_mode;
 
 #define SKIM_DECL_VALUE 1u
 #define SKIM_DECL_ENUM 2u
@@ -55,6 +56,7 @@ bool skim_emit_copy_plain_span(skim_str_t *out, const char *src, size_t end, siz
 
 char *skim_transform_typescript(const char *src, size_t len);
 char *skim_transform_typescript_len(const char *src, size_t len, size_t *out_len);
+void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out, skim_str_t *scratch);
 void skim_transform_range(const char *src, size_t len, size_t start, size_t end, skim_str_t *out);
 void skim_transform_js_range(const char *src, size_t len, size_t start, size_t end, skim_str_t *out);
 bool skim_transform_try_at(skim_str_t *out, const char *src, size_t len, size_t *io);

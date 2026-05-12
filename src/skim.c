@@ -4,6 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct {
+  skim_str_t output;
+  skim_str_t cleanup;
+} skim_context_impl_t;
+
 static void write_error(char *out, size_t out_len, const char *msg) {
   if (!out || out_len == 0) return;
   size_t n = strlen(msg);
@@ -63,23 +68,80 @@ static skim_options_t to_internal_options(const skim_options_t *options) {
   };
 }
 
-char *skim_strip_typescript_owned(
+static bool filename_has_suffix(const char *filename, const char *suffix) {
+  if (!filename || !suffix) return false;
+  size_t filename_len = strlen(filename);
+  size_t suffix_len = strlen(suffix);
+  return filename_len >= suffix_len && strcmp(filename + filename_len - suffix_len, suffix) == 0;
+}
+
+static skim_source_mode_t infer_source_mode(const char *filename) {
+  if (
+    filename_has_suffix(filename, ".cts") || filename_has_suffix(filename, ".cjs") ||
+    filename_has_suffix(filename, ".d.cts")
+  )
+    return SKIM_SOURCE_COMMONJS;
+  if (
+    filename_has_suffix(filename, ".mts") || filename_has_suffix(filename, ".mjs") ||
+    filename_has_suffix(filename, ".d.mts")
+  )
+    return SKIM_SOURCE_MODULE;
+  return SKIM_SOURCE_MODULE;
+}
+
+static skim_source_mode_t resolve_source_mode(const char *filename, skim_source_mode_t source_mode) {
+  return source_mode == SKIM_SOURCE_AUTO ? infer_source_mode(filename) : source_mode;
+}
+
+static skim_context_impl_t *context_impl(skim_context_t *ctx) {
+  return ctx ? (skim_context_impl_t *)ctx->impl : NULL;
+}
+
+int skim_context_init(skim_context_t *ctx) {
+  if (!ctx) return -1;
+  ctx->impl = calloc(1, sizeof(skim_context_impl_t));
+  return ctx->impl ? 0 : -1;
+}
+
+void skim_context_reset(skim_context_t *ctx) {
+  skim_context_impl_t *impl = context_impl(ctx);
+  if (!impl) return;
+  impl->output.len = 0;
+  impl->cleanup.len = 0;
+  if (impl->output.data) impl->output.data[0] = '\0';
+  if (impl->cleanup.data) impl->cleanup.data[0] = '\0';
+}
+
+void skim_context_deinit(skim_context_t *ctx) {
+  skim_context_impl_t *impl = context_impl(ctx);
+  if (!impl) return;
+  free(impl->output.data);
+  free(impl->cleanup.data);
+  free(impl);
+  ctx->impl = NULL;
+}
+
+const char *skim_strip_typescript_borrowed(
+  skim_context_t *ctx,
   const char *input,
   size_t input_len,
   const char *filename,
-  bool is_module,
+  skim_source_mode_t source_mode,
   const skim_options_t *options,
   size_t *out_len,
   skim_error_t *out_error,
   char *error_output,
   size_t error_output_len
 ) {
-  (void)filename;
-  (void)is_module;
-
+  skim_context_impl_t *impl = context_impl(ctx);
   if (out_len) *out_len = 0;
   if (out_error) *out_error = SKIM_ERR_NULL_INPUT;
 
+  if (!impl) {
+    if (out_error) *out_error = SKIM_ERR_NULL_INPUT;
+    write_error(error_output, error_output_len, "null context passed");
+    return NULL;
+  }
   if (!input || !out_len) {
     write_error(error_output, error_output_len, "null input/output passed");
     return NULL;
@@ -91,17 +153,74 @@ char *skim_strip_typescript_owned(
   }
 
   skim_options_t previous = skim_options;
+  skim_source_mode_t previous_source_mode = skim_source_mode;
   skim_options = to_internal_options(options);
-  char *result = skim_transform_typescript_len(input, input_len, out_len);
+  skim_source_mode = resolve_source_mode(filename, source_mode);
+  skim_transform_typescript_into(input, input_len, &impl->output, &impl->cleanup);
   skim_options = previous;
+  skim_source_mode = previous_source_mode;
 
-  if (!result) {
+  if (!impl->output.data) {
     if (out_error) *out_error = SKIM_ERR_TRANSFORM_FAILED;
     write_error(error_output, error_output_len, "failed to strip TypeScript");
     return NULL;
   }
 
+  *out_len = impl->output.len;
   if (out_error) *out_error = SKIM_OK;
+  return impl->output.data;
+}
+
+char *skim_strip_typescript_with_context(
+  skim_context_t *ctx,
+  const char *input,
+  size_t input_len,
+  const char *filename,
+  skim_source_mode_t source_mode,
+  const skim_options_t *options,
+  size_t *out_len,
+  skim_error_t *out_error,
+  char *error_output,
+  size_t error_output_len
+) {
+  const char *borrowed = skim_strip_typescript_borrowed(
+    ctx, input, input_len, filename, source_mode, options, out_len, out_error, error_output, error_output_len
+  );
+  if (!borrowed) return NULL;
+
+  char *result = malloc(*out_len + 1);
+  if (!result) {
+    if (out_error) *out_error = SKIM_ERR_TRANSFORM_FAILED;
+    write_error(error_output, error_output_len, "out of memory");
+    return NULL;
+  }
+  memcpy(result, borrowed, *out_len);
+  result[*out_len] = '\0';
+  return result;
+}
+
+char *skim_strip_typescript_owned(
+  const char *input,
+  size_t input_len,
+  const char *filename,
+  skim_source_mode_t source_mode,
+  const skim_options_t *options,
+  size_t *out_len,
+  skim_error_t *out_error,
+  char *error_output,
+  size_t error_output_len
+) {
+  skim_context_t ctx = {0};
+  if (skim_context_init(&ctx) != 0) {
+    if (out_len) *out_len = 0;
+    if (out_error) *out_error = SKIM_ERR_TRANSFORM_FAILED;
+    write_error(error_output, error_output_len, "out of memory");
+    return NULL;
+  }
+  char *result = skim_strip_typescript_with_context(
+    &ctx, input, input_len, filename, source_mode, options, out_len, out_error, error_output, error_output_len
+  );
+  skim_context_deinit(&ctx);
   return result;
 }
 
