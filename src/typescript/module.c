@@ -252,7 +252,8 @@ static bool push_import_binding(
   return true;
 }
 
-static import_binding_t *find_import_binding(import_binding_t *bindings, size_t count, const char *name, size_t name_len) {
+static import_binding_t *
+find_import_binding(import_binding_t *bindings, size_t count, const char *name, size_t name_len) {
   for (size_t i = 0; i < count; i++) {
     if (bindings[i].local_len == name_len && memcmp(bindings[i].local, name, name_len) == 0) return &bindings[i];
   }
@@ -264,7 +265,8 @@ static void mark_import_binding_decl(import_binding_t *bindings, size_t count, c
   if (binding) binding->later_decl = true;
 }
 
-static size_t mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *src, size_t len, size_t i) {
+static size_t
+mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *src, size_t len, size_t i) {
   size_t j = skim_skip_ws_comments(src, len, i + 6);
   if (skim_word_at(src, len, j, "type")) return skim_skip_statement_like(src, len, i);
 
@@ -333,7 +335,8 @@ static bool value_decl_keyword_at(const char *src, size_t len, size_t i, size_t 
   return false;
 }
 
-static void analyze_import_bindings(const char *src, size_t len, size_t start, import_binding_t *bindings, size_t count) {
+static void
+analyze_import_bindings(const char *src, size_t len, size_t start, import_binding_t *bindings, size_t count) {
   size_t live = 0;
   for (size_t b = 0; b < count; b++)
     live += !bindings[b].later_decl && !bindings[b].value_use;
@@ -897,114 +900,171 @@ static bool try_default_named_import(
   return true;
 }
 
+static size_t module_specifier_end(const char *src, size_t module_start, size_t stmt_end) {
+  size_t module_end = stmt_end;
+  if (module_end > module_start && src[module_end - 1] == ';') module_end--;
+  return module_end;
+}
+
+static bool try_type_import_statement(skim_str_t *out, const char *src, size_t len, size_t i, size_t j, size_t *io) {
+  if (!skim_word_at(src, len, j, "type")) return false;
+  size_t end = skim_skip_statement_like(src, len, i);
+  skim_emit_preserved_newlines(out, src, i, end);
+  *io = end;
+  return true;
+}
+
+static bool
+try_namespace_import_statement(skim_str_t *out, const char *src, size_t len, size_t i, size_t j, size_t *io) {
+  if (j >= len || src[j] != '*') return false;
+
+  size_t as_pos = skim_skip_ws_comments(src, len, j + 1);
+  if (!skim_word_at(src, len, as_pos, "as")) return false;
+
+  size_t name_start = 0, name_end = 0;
+  size_t after_name = skim_parse_identifier(src, len, as_pos + 2, &name_start, &name_end);
+  size_t from_pos = skim_skip_ws_comments(src, len, after_name);
+  if (name_start == name_end || !skim_word_at(src, len, from_pos, "from")) return false;
+
+  size_t module_start = skim_skip_ws_comments(src, len, from_pos + 4);
+  size_t end = skim_skip_statement_like(src, len, module_start);
+  size_t module_end = module_specifier_end(src, module_start, end);
+  char *local = skim_slice_dup(src, name_start, name_end);
+  bool keep = identifier_has_value_use(src, len, end, local) &&
+              !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
+              !has_value_declaration(src + end, len - end, local);
+  free(local);
+
+  if (keep) {
+    skim_str_puts(out, "import * as ");
+    skim_str_putn(out, src + name_start, name_end - name_start);
+    skim_str_puts(out, " from ");
+    skim_str_putn(out, src + module_start, module_end - module_start);
+    skim_str_puts(out, ";\n");
+  } else {
+    skim_emit_preserved_newlines(out, src, i, end);
+  }
+  *io = end;
+  return true;
+}
+
+static bool try_named_import_statement(skim_str_t *out, const char *src, size_t len, size_t i, size_t j, size_t *io) {
+  if (j >= len || src[j] != '{') return false;
+  if (!try_named_import(out, src, len, i, j)) return false;
+  *io = skim_skip_statement_like(src, len, j);
+  return true;
+}
+
+static bool try_default_named_import_statement(
+  skim_str_t *out,
+  const char *src,
+  size_t len,
+  size_t i,
+  size_t name_start,
+  size_t name_end,
+  size_t eq,
+  size_t *io
+) {
+  if (name_start == name_end || eq >= len || src[eq] != ',') return false;
+  size_t brace = skim_skip_ws_comments(src, len, eq + 1);
+  if (brace >= len || src[brace] != '{') return false;
+  if (!try_default_named_import(out, src, len, i, name_start, name_end, brace)) return false;
+  *io = skim_skip_statement_like(src, len, brace);
+  return true;
+}
+
+static bool try_import_equals_statement(
+  skim_str_t *out,
+  const char *src,
+  size_t len,
+  size_t i,
+  size_t name_start,
+  size_t name_end,
+  size_t eq,
+  size_t *io
+) {
+  if (name_start == name_end || eq >= len || src[eq] != '=') return false;
+
+  size_t rhs = skim_skip_ws_comments(src, len, eq + 1);
+  size_t end = import_equals_end(src, len, rhs);
+  size_t rhs_end = module_specifier_end(src, rhs, end);
+  while (rhs_end > rhs && (src[rhs_end - 1] == ' ' || src[rhs_end - 1] == '\t' || src[rhs_end - 1] == '\n'))
+    rhs_end--;
+
+  char *local = skim_slice_dup(src, name_start, name_end);
+  bool used =
+    strcmp(local, "await") != 0 && (skim_options.only_remove_type_imports || import_equals_is_live(src, len, local));
+  free(local);
+
+  if (used) {
+    bool is_require = skim_word_at(src, len, rhs, "require");
+    skim_str_puts(out, is_require ? "const " : "var ");
+    skim_str_putn(out, src + name_start, name_end - name_start);
+    skim_str_puts(out, " = ");
+    skim_str_putn(out, src + rhs, rhs_end - rhs);
+    skim_str_puts(out, ";\n");
+  } else {
+    skim_emit_preserved_newlines(out, src, i, end);
+  }
+  *io = end;
+  return true;
+}
+
+static bool try_default_import_statement(
+  skim_str_t *out,
+  const char *src,
+  size_t len,
+  size_t i,
+  size_t name_start,
+  size_t name_end,
+  size_t eq,
+  size_t *io
+) {
+  if (name_start == name_end || !skim_word_at(src, len, eq, "from")) return false;
+
+  size_t module_start = skim_skip_ws_comments(src, len, eq + 4);
+  size_t end = skim_skip_statement_like(src, len, module_start);
+  size_t module_end = module_specifier_end(src, module_start, end);
+  char *local = skim_slice_dup(src, name_start, name_end);
+  bool keep = identifier_has_value_use(src, len, end, local) &&
+              !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
+              !has_value_declaration(src + end, len - end, local);
+  free(local);
+
+  if (keep) {
+    skim_str_puts(out, "import ");
+    skim_str_putn(out, src + name_start, name_end - name_start);
+    skim_str_puts(out, " from ");
+    skim_str_putn(out, src + module_start, module_end - module_start);
+    skim_str_puts(out, ";\n");
+  } else {
+    skim_emit_preserved_newlines(out, src, i, end);
+  }
+  *io = end;
+  return true;
+}
+
+static bool try_import_statement(skim_str_t *out, const char *src, size_t len, size_t i, size_t *io) {
+  if (!skim_word_at(src, len, i, "import")) return false;
+
+  size_t j = skim_skip_ws_comments(src, len, i + 6);
+  if (try_type_import_statement(out, src, len, i, j, io)) return true;
+  if (try_namespace_import_statement(out, src, len, i, j, io)) return true;
+  if (try_named_import_statement(out, src, len, i, j, io)) return true;
+
+  size_t name_start = 0, name_end = 0;
+  size_t after_name = skim_parse_identifier(src, len, j, &name_start, &name_end);
+  size_t eq = skim_skip_ws_comments(src, len, after_name);
+  if (try_default_named_import_statement(out, src, len, i, name_start, name_end, eq, io)) return true;
+  if (try_import_equals_statement(out, src, len, i, name_start, name_end, eq, io)) return true;
+  if (try_default_import_statement(out, src, len, i, name_start, name_end, eq, io)) return true;
+  return false;
+}
+
 bool skim_ts_module_try(skim_str_t *out, const char *src, size_t len, size_t *io) {
   size_t i = *io;
 
-  if (skim_word_at(src, len, i, "import")) {
-    size_t j = skim_skip_ws_comments(src, len, i + 6);
-    if (skim_word_at(src, len, j, "type")) {
-      size_t end = skim_skip_statement_like(src, len, i);
-      skim_emit_preserved_newlines(out, src, i, end);
-      *io = end;
-      return true;
-    }
-
-    if (j < len && src[j] == '*') {
-      size_t as_pos = skim_skip_ws_comments(src, len, j + 1);
-      if (skim_word_at(src, len, as_pos, "as")) {
-        size_t name_start = 0, name_end = 0;
-        size_t after_name = skim_parse_identifier(src, len, as_pos + 2, &name_start, &name_end);
-        size_t from_pos = skim_skip_ws_comments(src, len, after_name);
-        if (name_start != name_end && skim_word_at(src, len, from_pos, "from")) {
-          size_t module_start = skim_skip_ws_comments(src, len, from_pos + 4);
-          size_t end = skim_skip_statement_like(src, len, module_start);
-          size_t module_end = end;
-          if (module_end > module_start && src[module_end - 1] == ';') module_end--;
-          char *local = skim_slice_dup(src, name_start, name_end);
-          bool keep = identifier_has_value_use(src, len, end, local) &&
-                      !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
-                      !has_value_declaration(src + end, len - end, local);
-          free(local);
-          if (keep) {
-            skim_str_puts(out, "import * as ");
-            skim_str_putn(out, src + name_start, name_end - name_start);
-            skim_str_puts(out, " from ");
-            skim_str_putn(out, src + module_start, module_end - module_start);
-            skim_str_puts(out, ";\n");
-          } else {
-            skim_emit_preserved_newlines(out, src, i, end);
-          }
-          *io = end;
-          return true;
-        }
-      }
-    }
-
-    if (j < len && src[j] == '{') {
-      if (try_named_import(out, src, len, i, j)) {
-        *io = skim_skip_statement_like(src, len, j);
-        return true;
-      }
-    }
-
-    size_t name_start = 0, name_end = 0;
-    size_t after_name = skim_parse_identifier(src, len, j, &name_start, &name_end);
-    size_t eq = skim_skip_ws_comments(src, len, after_name);
-    if (name_start != name_end && eq < len && src[eq] == ',') {
-      size_t brace = skim_skip_ws_comments(src, len, eq + 1);
-      if (brace < len && src[brace] == '{' && try_default_named_import(out, src, len, i, name_start, name_end, brace)) {
-        *io = skim_skip_statement_like(src, len, brace);
-        return true;
-      }
-    }
-    if (name_start != name_end && eq < len && src[eq] == '=') {
-      size_t rhs = skim_skip_ws_comments(src, len, eq + 1);
-      size_t end = import_equals_end(src, len, rhs);
-      size_t rhs_end = end;
-      if (rhs_end > rhs && src[rhs_end - 1] == ';') rhs_end--;
-      while (rhs_end > rhs && (src[rhs_end - 1] == ' ' || src[rhs_end - 1] == '\t' || src[rhs_end - 1] == '\n'))
-        rhs_end--;
-
-      char *local = skim_slice_dup(src, name_start, name_end);
-      bool used = strcmp(local, "await") != 0 &&
-                  (skim_options.only_remove_type_imports || import_equals_is_live(src, len, local));
-      free(local);
-      if (used) {
-        bool is_require = skim_word_at(src, len, rhs, "require");
-        skim_str_puts(out, is_require ? "const " : "var ");
-        skim_str_putn(out, src + name_start, name_end - name_start);
-        skim_str_puts(out, " = ");
-        skim_str_putn(out, src + rhs, rhs_end - rhs);
-        skim_str_puts(out, ";\n");
-      } else {
-        skim_emit_preserved_newlines(out, src, i, end);
-      }
-      *io = end;
-      return true;
-    }
-    if (name_start != name_end && skim_word_at(src, len, eq, "from")) {
-      size_t module_start = skim_skip_ws_comments(src, len, eq + 4);
-      size_t end = skim_skip_statement_like(src, len, module_start);
-      size_t module_end = end;
-      if (module_end > module_start && src[module_end - 1] == ';') module_end--;
-      char *local = skim_slice_dup(src, name_start, name_end);
-      bool keep = identifier_has_value_use(src, len, end, local) &&
-                  !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
-                  !has_value_declaration(src + end, len - end, local);
-      free(local);
-      if (keep) {
-        skim_str_puts(out, "import ");
-        skim_str_putn(out, src + name_start, name_end - name_start);
-        skim_str_puts(out, " from ");
-        skim_str_putn(out, src + module_start, module_end - module_start);
-        skim_str_puts(out, ";\n");
-      } else {
-        skim_emit_preserved_newlines(out, src, i, end);
-      }
-      *io = end;
-      return true;
-    }
-  }
+  if (try_import_statement(out, src, len, i, io)) return true;
 
   if (skim_word_at(src, len, i, "export")) {
     size_t j = skim_skip_ws_comments(src, len, i + 6);

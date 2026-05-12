@@ -701,6 +701,53 @@ static void emit_preserved_class_member_prefix(
   if (saw_accessor) skim_str_puts(out, "accessor ");
 }
 
+static bool try_consume_following_class_type_member(
+  skim_str_t *out,
+  const char *src,
+  size_t len,
+  size_t end,
+  size_t stmt_end,
+  size_t *io
+) {
+  size_t next_member = skim_skip_ws_comments(src, len, stmt_end);
+  const char *next_mod = NULL;
+  size_t next_mod_len = 0;
+  bool next_abstract = false;
+  bool saw_next_modifier = false;
+  while (next_member < end &&
+         class_member_modifier_at(src, len, next_member, &next_mod, &next_mod_len, &next_abstract)) {
+    saw_next_modifier = true;
+    next_member = skim_skip_ws_comments(src, len, next_member + next_mod_len);
+  }
+  if (!saw_next_modifier || next_member >= end) return false;
+
+  if (bracket_contains_type_colon(src, len, next_member)) {
+    size_t next_bracket_end = skip_class_member_name(src, len, next_member);
+    size_t next_colon = skim_skip_ws_comments(src, len, next_bracket_end);
+    if (next_colon < end && src[next_colon] == ':') {
+      *io = skip_class_index_signature_tail(src, len, next_colon + 1);
+      return true;
+    }
+  }
+
+  size_t next_name_start = next_member;
+  size_t next_name_end = skip_class_member_name(src, len, next_member);
+  if (next_name_end <= next_name_start) return false;
+
+  size_t after_next_name = skim_skip_ws_comments(src, len, next_name_end);
+  if (after_next_name >= end || src[after_next_name] != ':') return false;
+
+  size_t next_type_end = skip_class_type_tail(src, len, after_next_name + 1);
+  next_type_end = skim_skip_ws_comments(src, len, next_type_end);
+  skim_str_putn(out, src + next_name_start, next_name_end - next_name_start);
+  if (next_type_end < end && src[next_type_end] == ';') {
+    skim_str_putc(out, ';');
+    next_type_end++;
+  }
+  *io = next_type_end;
+  return true;
+}
+
 static bool
 try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_t i, size_t end, size_t *io) {
   if (!looks_like_class_member_start(src, i)) return false;
@@ -767,41 +814,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     size_t stmt_end = skim_skip_statement_like(src, len, j);
     if (stmt_end > end) stmt_end = end;
     skim_emit_preserved_newlines(out, src, i, stmt_end);
-    size_t next_member = skim_skip_ws_comments(src, len, stmt_end);
-    const char *next_mod = NULL;
-    size_t next_mod_len = 0;
-    bool next_abstract = false;
-    bool saw_next_modifier = false;
-    while (next_member < end &&
-           class_member_modifier_at(src, len, next_member, &next_mod, &next_mod_len, &next_abstract)) {
-      saw_next_modifier = true;
-      next_member = skim_skip_ws_comments(src, len, next_member + next_mod_len);
-    }
-    if (saw_next_modifier && next_member < end) {
-      if (bracket_contains_type_colon(src, len, next_member)) {
-        size_t next_bracket_end = skip_class_member_name(src, len, next_member);
-        size_t next_colon = skim_skip_ws_comments(src, len, next_bracket_end);
-        if (next_colon < end && src[next_colon] == ':') {
-          *io = skip_class_index_signature_tail(src, len, next_colon + 1);
-          return true;
-        }
-      }
-      size_t next_name_start = next_member;
-      size_t next_name_end = skip_class_member_name(src, len, next_member);
-      if (next_name_end > next_name_start) {
-        size_t after_next_name = skim_skip_ws_comments(src, len, next_name_end);
-        if (after_next_name < end && src[after_next_name] == ':') {
-          size_t next_type_end = skim_skip_ws_comments(src, len, skip_class_type_tail(src, len, after_next_name + 1));
-          skim_str_putn(out, src + next_name_start, next_name_end - next_name_start);
-          if (next_type_end < end && src[next_type_end] == ';') {
-            skim_str_putc(out, ';');
-            next_type_end++;
-          }
-          *io = next_type_end;
-          return true;
-        }
-      }
-    }
+    if (try_consume_following_class_type_member(out, src, len, end, stmt_end, io)) return true;
     *io = stmt_end;
     return true;
   }
@@ -817,41 +830,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     }
     if (stmt_end > end) stmt_end = end;
     skim_emit_preserved_newlines(out, src, i, stmt_end);
-    size_t next_member = skim_skip_ws_comments(src, len, stmt_end);
-    const char *next_mod = NULL;
-    size_t next_mod_len = 0;
-    bool next_abstract = false;
-    bool saw_next_modifier = false;
-    while (next_member < end &&
-           class_member_modifier_at(src, len, next_member, &next_mod, &next_mod_len, &next_abstract)) {
-      saw_next_modifier = true;
-      next_member = skim_skip_ws_comments(src, len, next_member + next_mod_len);
-    }
-    if (saw_next_modifier && next_member < end) {
-      if (bracket_contains_type_colon(src, len, next_member)) {
-        size_t next_bracket_end = skip_class_member_name(src, len, next_member);
-        size_t next_colon = skim_skip_ws_comments(src, len, next_bracket_end);
-        if (next_colon < end && src[next_colon] == ':') {
-          *io = skip_class_index_signature_tail(src, len, next_colon + 1);
-          return true;
-        }
-      }
-      size_t next_name_start = next_member;
-      size_t next_name_end = skip_class_member_name(src, len, next_member);
-      if (next_name_end > next_name_start) {
-        size_t after_next_name = skim_skip_ws_comments(src, len, next_name_end);
-        if (after_next_name < end && src[after_next_name] == ':') {
-          size_t next_type_end = skim_skip_ws_comments(src, len, skip_class_type_tail(src, len, after_next_name + 1));
-          skim_str_putn(out, src + next_name_start, next_name_end - next_name_start);
-          if (next_type_end < end && src[next_type_end] == ';') {
-            skim_str_putc(out, ';');
-            next_type_end++;
-          }
-          *io = next_type_end;
-          return true;
-        }
-      }
-    }
+    if (try_consume_following_class_type_member(out, src, len, end, stmt_end, io)) return true;
     *io = stmt_end;
     return true;
   }
@@ -1069,8 +1048,8 @@ static bool try_remove_literal_named_class_type_member(
   size_t colon = skim_skip_ws_comments(src, len, name_end);
   if (colon >= end || src[colon] != ':') return false;
   size_t type_start = skim_skip_ws_comments(src, len, colon + 1);
-  size_t type_end = type_start < end && src[type_start] == '{' ? skim_skip_balanced(src, len, type_start, '{', '}')
-                                                               : skip_class_type_tail(src, len, colon + 1);
+  size_t type_end = skip_class_type_tail(src, len, colon + 1);
+  if (type_start < end && src[type_start] == '{') type_end = skim_skip_balanced(src, len, type_start, '{', '}');
   size_t after_type = skim_skip_ws_comments(src, len, type_end);
   if (after_type < end && src[after_type] == '=') {
     size_t stmt_end = skim_skip_statement_like(src, len, after_type);
@@ -1097,122 +1076,128 @@ static bool try_remove_literal_named_class_type_member(
   return false;
 }
 
+static bool
+copy_class_body_common_token(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io, bool allow_ts) {
+  size_t i = *io;
+  if (based_number_literal_at(src, len, i)) {
+    *io = copy_based_number_literal(out, src, len, i);
+    return true;
+  }
+  if (decimal_number_literal_at(src, len, i)) {
+    *io = copy_decimal_number_literal(out, src, len, i);
+    return true;
+  }
+  if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
+    *io = skim_copy_string(out, src, len, i);
+    return true;
+  }
+  if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
+    *io = skim_copy_line_comment(out, src, len, i);
+    return true;
+  }
+  if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
+    *io = skim_copy_block_comment(out, src, len, i);
+    return true;
+  }
+  if (allow_ts && src[i] != '@' && skim_transform_try_at(out, src, len, io)) return true;
+  (void)end;
+  return false;
+}
+
+static bool
+copy_nested_class_body_token(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io, int *depth) {
+  size_t i = *io;
+  if (copy_class_body_common_token(out, src, len, end, io, true)) return true;
+  if (src[i] == '{') {
+    (*depth)++;
+    skim_str_putc(out, src[i]);
+    *io = i + 1;
+    return true;
+  }
+  if (src[i] == '}') {
+    (*depth)--;
+    skim_str_putc(out, src[i]);
+    *io = i + 1;
+    return true;
+  }
+  if (skim_emit_copy_plain_identifier(out, src, end, io)) return true;
+  if (skim_emit_copy_plain_span(out, src, end, io)) return true;
+  skim_str_putc(out, src[i]);
+  *io = i + 1;
+  return true;
+}
+
+static bool copy_class_top_level_space(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io) {
+  size_t i = *io;
+  if (!isspace((unsigned char)src[i])) return false;
+
+  size_t j = i;
+  bool has_newline = false;
+  while (j < end && isspace((unsigned char)src[j])) {
+    has_newline = has_newline || src[j] == '\n' || src[j] == '\r';
+    j++;
+  }
+  if (has_newline && class_prev_needs_member_separator(out) && next_looks_like_class_member(src, len, j, end)) {
+    skim_str_putc(out, ';');
+  }
+  skim_str_putn(out, src + i, j - i);
+  *io = j;
+  return true;
+}
+
+static bool class_reserved_word_before_method_call(const char *src, size_t len, size_t i, size_t end) {
+  if (!skim_is_id_start(src[i])) return false;
+
+  size_t name_start = 0, name_end = 0;
+  size_t after_name = skim_parse_identifier(src, len, i, &name_start, &name_end);
+  size_t next = skim_skip_ws_comments(src, len, after_name);
+  if (name_start != i || next >= end || src[next] != '(') return false;
+
+  return skim_word_at(src, len, i, "class") || skim_word_at(src, len, i, "enum") ||
+         skim_word_at(src, len, i, "export") || skim_word_at(src, len, i, "function") ||
+         skim_word_at(src, len, i, "import") || skim_word_at(src, len, i, "interface") ||
+         skim_word_at(src, len, i, "module") || skim_word_at(src, len, i, "namespace") ||
+         skim_word_at(src, len, i, "type");
+}
+
 static void transform_class_body_range(const char *src, size_t len, size_t start, size_t end, skim_str_t *out) {
   int depth = 0;
   for (size_t i = start; i < end;) {
     if (depth > 0) {
-      if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-        i = skim_copy_string(out, src, len, i);
-        continue;
-      }
-      if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-        i = skim_copy_line_comment(out, src, len, i);
-        continue;
-      }
-      if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-        i = skim_copy_block_comment(out, src, len, i);
-        continue;
-      }
-      if (based_number_literal_at(src, len, i)) {
-        i = copy_based_number_literal(out, src, len, i);
-        continue;
-      }
-      if (decimal_number_literal_at(src, len, i)) {
-        i = copy_decimal_number_literal(out, src, len, i);
-        continue;
-      }
-      if (src[i] != '@' && skim_transform_try_at(out, src, len, &i)) continue;
-      if (src[i] == '{') {
-        depth++;
-        skim_str_putc(out, src[i++]);
-        continue;
-      }
-      if (src[i] == '}') {
-        depth--;
-        skim_str_putc(out, src[i++]);
-        continue;
-      }
-      if (skim_emit_copy_plain_identifier(out, src, end, &i)) continue;
-      if (skim_emit_copy_plain_span(out, src, end, &i)) continue;
-      skim_str_putc(out, src[i++]);
+      copy_nested_class_body_token(out, src, len, end, &i, &depth);
       continue;
     }
-    if (depth == 0 && isspace((unsigned char)src[i])) {
-      size_t j = i;
-      bool has_newline = false;
-      while (j < end && isspace((unsigned char)src[j])) {
-        has_newline = has_newline || src[j] == '\n' || src[j] == '\r';
-        j++;
-      }
-      if (has_newline && class_prev_needs_member_separator(out) && next_looks_like_class_member(src, len, j, end)) {
-        skim_str_putc(out, ';');
-      }
-      skim_str_putn(out, src + i, j - i);
-      i = j;
-      continue;
-    }
-    if (depth == 0 && try_remove_class_type_member(out, src, len, i, end, &i)) continue;
-    if (depth == 0 && try_remove_literal_named_class_type_member(out, src, len, i, end, &i)) continue;
-    if (based_number_literal_at(src, len, i)) {
-      i = copy_based_number_literal(out, src, len, i);
-      continue;
-    }
-    if (decimal_number_literal_at(src, len, i)) {
-      i = copy_decimal_number_literal(out, src, len, i);
-      continue;
-    }
-    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-      i = skim_copy_string(out, src, len, i);
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i = skim_copy_line_comment(out, src, len, i);
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i = skim_copy_block_comment(out, src, len, i);
-      continue;
-    }
-    if (depth == 0 && src[i] == ';') {
+    if (copy_class_top_level_space(out, src, len, end, &i)) continue;
+    if (try_remove_class_type_member(out, src, len, i, end, &i)) continue;
+    if (try_remove_literal_named_class_type_member(out, src, len, i, end, &i)) continue;
+    if (copy_class_body_common_token(out, src, len, end, &i, false)) continue;
+    if (src[i] == ';') {
       if (!class_semicolon_is_empty_element(out)) skim_str_putc(out, src[i]);
       i++;
       continue;
     }
-    if (depth == 0 && class_keyword_used_as_field_name(src, len, i)) {
+    if (class_keyword_used_as_field_name(src, len, i)) {
       skim_str_putc(out, src[i++]);
       continue;
     }
-    if (depth == 0 && skim_word_at(src, len, i, "abstract")) {
+    if (skim_word_at(src, len, i, "abstract")) {
       i += 8;
       continue;
     }
-    if (depth == 0 && class_modifier_word_used_as_method_name(src, len, i)) {
+    if (class_modifier_word_used_as_method_name(src, len, i)) {
       skim_str_putc(out, src[i++]);
       continue;
     }
-    if (depth == 0 && class_modifier_word_used_as_field_name(src, len, i, end)) {
+    if (class_modifier_word_used_as_field_name(src, len, i, end)) {
       skim_str_putc(out, src[i++]);
       continue;
     }
-    if (depth == 0 && skim_is_id_start(src[i])) {
-      size_t name_start = 0, name_end = 0;
-      size_t after_name = skim_parse_identifier(src, len, i, &name_start, &name_end);
-      size_t next = skim_skip_ws_comments(src, len, after_name);
-      if (
-        name_start == i && next < end && src[next] == '(' &&
-        (skim_word_at(src, len, i, "class") || skim_word_at(src, len, i, "enum") ||
-         skim_word_at(src, len, i, "export") || skim_word_at(src, len, i, "function") ||
-         skim_word_at(src, len, i, "import") || skim_word_at(src, len, i, "interface") ||
-         skim_word_at(src, len, i, "module") || skim_word_at(src, len, i, "namespace") ||
-         skim_word_at(src, len, i, "type"))
-      ) {
-        skim_str_putc(out, src[i++]);
-        continue;
-      }
+    if (class_reserved_word_before_method_call(src, len, i, end)) {
+      skim_str_putc(out, src[i++]);
+      continue;
     }
     if (src[i] != '@' && skim_transform_try_at(out, src, len, &i)) continue;
     if (src[i] == '{') depth++;
-    else if (src[i] == '}' && depth > 0) depth--;
     if (depth > 0 && skim_emit_copy_plain_identifier(out, src, end, &i)) continue;
     if (depth > 0 && skim_emit_copy_plain_span(out, src, end, &i)) continue;
     skim_str_putc(out, src[i++]);
