@@ -1,0 +1,15 @@
+[tasks.build]
+path = "build"
+script = "meson compile"
+
+[tasks.clean]
+script = "rm -rf build"
+
+[tasks.setup]
+script = "meson setup build --wipe"
+
+[tasks.test]
+script = "meson test -C build --print-errorlogs && node tests/run.cjs"
+
+[tasks.test_all]
+script = "node tests/run_all.cjs"

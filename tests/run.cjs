@@ -1,0 +1,57 @@
+const { spawnSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { requireSkimBin, root } = require('./support.cjs');
+
+const here = path.join(root, 'tests');
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skim-fixtures-'));
+const bin = requireSkimBin();
+
+function run(cmd, args, opts = {}) {
+  const result = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', ...opts });
+  if (result.error) throw result.error;
+  return result;
+}
+
+function assertOk(result, label) {
+  if (result.status !== 0) throw new Error(`${label} failed with ${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+}
+
+const cases = [
+  ['annotations.ts', 'ant:6\n'],
+  ['class_modifiers.ts', 'ready 3\n'],
+  ['enum.ts', '1 2 blue\n'],
+  ['enum_refs.ts', '1 3\n'],
+  ['export_named.ts', '42\n'],
+  ['generics.ts', '4 ok\n'],
+  ['mixed_default_import.ts', '50\n'],
+  ['mixed_import.ts', '42\n'],
+  ['namespace.ts', '7\n'],
+  ['namespace_exports.ts', '11 hi\n'],
+  ['non_null_optional.ts', 'yes 5\n'],
+  ['parameter_property.ts', '9\n'],
+  ['parameter_property_super.ts', '12\n'],
+  ['import_equals.cjs.ts', 'function\n']
+];
+
+for (const support of fs.readdirSync(path.join(here, 'fixtures')).filter(name => name.endsWith('.mjs') || name.endsWith('.cjs'))) {
+  fs.copyFileSync(path.join(here, 'fixtures', support), path.join(tmp, support));
+}
+
+for (const [fixture, expected] of cases) {
+  const source = path.join(here, 'fixtures', fixture);
+  const js = path.join(tmp, fixture.replace(/\.ts$/, fixture.includes('.cjs.') ? '.cjs' : '.mjs'));
+  const strip = run(bin, [source]);
+  assertOk(strip, `strip ${fixture}`);
+  fs.writeFileSync(js, strip.stdout);
+
+  const node = run(process.execPath, [js]);
+  assertOk(node, `run ${fixture}`);
+  if (node.stdout !== expected)
+    throw new Error(
+      `${fixture} stdout mismatch\nexpected: ${JSON.stringify(expected)}\nactual:   ${JSON.stringify(node.stdout)}\n\nGenerated JS:\n${strip.stdout}`
+    );
+}
+
+console.log('skim fixtures passed');
