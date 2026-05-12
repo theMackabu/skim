@@ -523,19 +523,13 @@ void skim_parse_program(skim_ast_program_t *program, const char *src, size_t len
     skim_ast_item_kind_t kind = classify_item(src, len, first);
     record_decl(src, len, content_start);
     size_t end = item_has_own_braced_body(src, len, content_start)
-                   ? braced_item_end(src, len, content_start)
-                   : (item_is_variable_decl(src, len, content_start)
-                        ? variable_item_end(src, len, content_start)
-                        : (kind == SKIM_AST_ITEM_TYPE_ALIAS ? type_alias_item_end(src, len, content_start)
-                           : kind == SKIM_AST_ITEM_DECLARE  ? skim_skip_statement_like(src, len, content_start)
-                                                            : text_item_end(src, len, content_start)));
-    if (
-      kind == SKIM_AST_ITEM_CLASS && skim_options.set_public_class_fields && !skim_options.transform_class_properties &&
-      strstr(src + content_start, "StaticClsWithComputedKeyMethods") && strstr(src + content_start, "accessor [e()]")
-    ) {
-      end = len;
-    }
-    if (end <= content_start) end = content_start + 1;
+      ? braced_item_end(src, len, content_start)
+      : (item_is_variable_decl(src, len, content_start)
+          ? variable_item_end(src, len, content_start)
+          : (kind == SKIM_AST_ITEM_TYPE_ALIAS ? type_alias_item_end(src, len, content_start)
+            : kind == SKIM_AST_ITEM_DECLARE ? skim_skip_statement_like(src, len, content_start)
+            : text_item_end(src, len, content_start)));
+  if (end <= content_start) end = content_start + 1;
     push_item(program, kind, start, content_start, end);
     i = end;
   }

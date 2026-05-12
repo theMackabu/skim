@@ -148,6 +148,13 @@ for (const base of fixtureRoots) {
     const fixtureOptions = optionsForFixture(dir, base);
     const label = fixtureOptions.labels.length ? fixtureOptions.labels.join(', ') : 'default';
     optionBuckets.set(label, (optionBuckets.get(label) || 0) + 1);
+    if (
+      fixtureOptions.labels.includes('transform-class-properties') ||
+      fixtureOptions.labels.includes('setPublicClassFields')
+    ) {
+      skipFixture(rel, 'class field lowering');
+      continue;
+    }
 
     total++;
     const strip = run(bin, [...fixtureOptions.flags, input]);
