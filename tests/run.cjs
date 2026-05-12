@@ -7,6 +7,8 @@ const { requireSkimBin, root } = require('./support.cjs');
 const here = path.join(root, 'tests');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skim-fixtures-'));
 const bin = requireSkimBin();
+const meson = fs.readFileSync(path.join(root, 'meson.build'), 'utf8');
+const version = meson.match(/version:\s*'([^']+)'/)[1];
 
 function run(cmd, args, opts = {}) {
   const result = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', ...opts });
@@ -17,6 +19,11 @@ function run(cmd, args, opts = {}) {
 function assertOk(result, label) {
   if (result.status !== 0) throw new Error(`${label} failed with ${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
 }
+
+const versionResult = run(bin, ['--version']);
+assertOk(versionResult, 'skim --version');
+if (versionResult.stdout !== `skim ${version}\n`)
+  throw new Error(`--version mismatch\nexpected: skim ${version}\nactual:   ${versionResult.stdout}`);
 
 const cases = [
   ['annotations.ts', 'ant:6\n'],

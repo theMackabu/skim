@@ -1,5 +1,5 @@
 project('skim', 'c',
-  version: '0.0.2',
+  version: '0.0.3',
   license: 'MIT',
   default_options: [
     'c_std=c23',
@@ -44,6 +44,7 @@ skim_cli = executable('skim',
   files('tools/skim.c'),
   dependencies: skim_dep,
   include_directories: private_inc,
+  c_args: ['-DSKIM_VERSION="' + meson.project_version() + '"'],
   install: true,
 )
 
