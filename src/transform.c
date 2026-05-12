@@ -48,7 +48,7 @@ static bool cleanup_try_copy_unwrapped_identifier_paren(skim_str_t *out, const c
   size_t i = *io;
   if (src[i] != '(') return false;
   char prev = cleanup_prev_non_ws(out);
-  if (skim_is_id_part(prev) || prev == ')' || prev == ']') return false;
+  if (skim_is_id_part(prev) || prev == ')' || prev == ']' || prev == '}') return false;
   size_t name_start = cleanup_skip_ws(src, len, i + 1);
   if (name_start >= len || !skim_is_id_start(src[name_start])) return false;
   size_t name_end = name_start + 1;

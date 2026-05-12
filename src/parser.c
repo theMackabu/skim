@@ -510,8 +510,8 @@ bool skim_syntax_item_needs_statement_semicolon(
 }
 
 static size_t item_end_for_kind(const char *src, size_t len, size_t content_start, skim_ast_item_kind_t kind) {
-  if (item_has_own_braced_body(src, len, content_start)) return braced_item_end(src, len, content_start);
   if (item_is_variable_decl(src, len, content_start)) return variable_item_end(src, len, content_start);
+  if (item_has_own_braced_body(src, len, content_start)) return braced_item_end(src, len, content_start);
   if (kind == SKIM_AST_ITEM_TYPE_ALIAS) return type_alias_item_end(src, len, content_start);
   if (kind == SKIM_AST_ITEM_DECLARE) return skim_skip_statement_like(src, len, content_start);
   return text_item_end(src, len, content_start);
