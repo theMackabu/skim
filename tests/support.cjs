@@ -65,6 +65,25 @@ function resolveSkimBin() {
   return existingFile([process.env.SKIM_BIN, path.join(root, 'build', process.platform === 'win32' ? 'skim.exe' : 'skim')]);
 }
 
+function resolveNodeBin() {
+  const execPath = process.execPath || '';
+  return existingFile([
+    process.env.NODE_BIN,
+    process.env.NODE,
+    path.basename(execPath).startsWith('node') ? execPath : '',
+    findOnPath('node')
+  ]);
+}
+
+function requireNodeBin() {
+  const bin = resolveNodeBin();
+  if (!bin) {
+    console.error('error: node binary not found. Set NODE_BIN or put node on PATH.');
+    process.exit(1);
+  }
+  return bin;
+}
+
 function requireSkimBin() {
   const bin = resolveSkimBin();
   if (!bin) {
@@ -88,7 +107,9 @@ module.exports = {
   root,
   existingDir,
   existingFile,
+  requireNodeBin,
   requireSkimBin,
+  resolveNodeBin,
   resolveOxcEmit,
   resolveOxcRoot,
   resolveSkimBin,

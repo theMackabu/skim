@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { normalizeOfficialTypeScriptOutput: normalize } = require('./normalize.cjs');
-const { existingDir, requireSkimBin, resolveOxcEmit, resolveOxcRoot, resolveTypeScriptRoot, root, skip } = require('./support.cjs');
+const { existingDir, requireNodeBin, requireSkimBin, resolveOxcEmit, resolveOxcRoot, resolveTypeScriptRoot, root, skip } = require('./support.cjs');
 
 const tsRoot = resolveTypeScriptRoot();
 const tsCases = process.env.TS_CASES || (tsRoot ? path.join(tsRoot, 'tests/cases/conformance') : '');
@@ -24,6 +24,7 @@ const progressEvery = Number(process.env.TS_SUITE_PROGRESS || '0');
 const jobs = Math.max(1, Number(process.env.TS_SUITE_JOBS || Math.max(1, Math.min(os.cpus().length, 8))));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skim-ts-official-'));
 const cBin = requireSkimBin();
+const nodeBin = requireNodeBin();
 
 function run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -85,6 +86,7 @@ console.error(`TypeScript suite: cases=${tsCases}`);
 console.error(`TypeScript suite: files=${files.length} limit=${limit || 'none'} offset=${offset} filter=${filter || 'none'}`);
 console.error(`TypeScript suite: skim=${cBin}`);
 console.error(`TypeScript suite: oxc_emit=${oxcEmit}`);
+console.error(`TypeScript suite: node=${nodeBin}`);
 console.error(`TypeScript suite: jobs=${jobs}`);
 if (progressEvery > 0) console.error(`TypeScript suite: progress every ${progressEvery} scanned files`);
 
@@ -129,10 +131,10 @@ async function processFile(file, index) {
   const cJs = path.join(tmp, `c-${index}.mjs`);
   fs.writeFileSync(oxcJs, oxc.stdout);
   fs.writeFileSync(cJs, c.stdout);
-  const oxcCheck = await run(process.execPath, ['--check', oxcJs]);
+  const oxcCheck = await run(nodeBin, ['--check', oxcJs]);
   if (oxcCheck.status === 0) {
     syntaxChecked = 1;
-    const cCheck = await run(process.execPath, ['--check', cJs]);
+    const cCheck = await run(nodeBin, ['--check', cJs]);
     if (cCheck.status === 0) syntaxPass = 1;
     else {
       return {

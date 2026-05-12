@@ -2,7 +2,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { requireSkimBin, resolveOxcRoot, root, skip } = require('./support.cjs');
+const { requireNodeBin, requireSkimBin, resolveOxcRoot, root, skip } = require('./support.cjs');
 
 const here = path.join(root, 'tests');
 const oxcRoot = resolveOxcRoot();
@@ -19,6 +19,7 @@ if (fixtureRoots.length === 0) {
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skim-oxc-suite-'));
 const bin = requireSkimBin();
+const nodeBin = requireNodeBin();
 
 function run(cmd, args, opts = {}) {
   const result = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', ...opts });
@@ -165,7 +166,7 @@ for (const base of fixtureRoots) {
 
     const generated = path.join(tmp, rel.replace(/[\/\\]/g, '__') + '.mjs');
     fs.writeFileSync(generated, strip.stdout);
-    const check = run(process.execPath, ['--check', generated]);
+    const check = run(nodeBin, ['--check', generated]);
     if (check.status !== 0) {
       failures.push({ rel, kind: 'syntax', detail: check.stderr.split('\n').slice(0, 6).join('\n') });
       continue;

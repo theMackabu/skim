@@ -211,6 +211,186 @@ static bool has_value_declaration(const char *src, size_t len, const char *name)
   return false;
 }
 
+typedef struct {
+  char *local;
+  size_t local_len;
+  size_t spec_start;
+  size_t spec_end;
+  bool value_use;
+  bool later_decl;
+} import_binding_t;
+
+static void free_import_bindings(import_binding_t *bindings, size_t count) {
+  for (size_t i = 0; i < count; i++)
+    free(bindings[i].local);
+  free(bindings);
+}
+
+static bool push_import_binding(
+  import_binding_t **bindings,
+  size_t *count,
+  size_t *cap,
+  char *local,
+  size_t spec_start,
+  size_t spec_end
+) {
+  if (!local) return false;
+  if (*count == *cap) {
+    size_t next_cap = *cap ? *cap * 2 : 32;
+    import_binding_t *next = realloc(*bindings, sizeof(*next) * next_cap);
+    if (!next) skim_die("out of memory");
+    *bindings = next;
+    *cap = next_cap;
+  }
+  (*bindings)[*count] = (import_binding_t){
+    .local = local,
+    .local_len = strlen(local),
+    .spec_start = spec_start,
+    .spec_end = spec_end,
+  };
+  (*count)++;
+  return true;
+}
+
+static import_binding_t *find_import_binding(import_binding_t *bindings, size_t count, const char *name, size_t name_len) {
+  for (size_t i = 0; i < count; i++) {
+    if (bindings[i].local_len == name_len && memcmp(bindings[i].local, name, name_len) == 0) return &bindings[i];
+  }
+  return NULL;
+}
+
+static void mark_import_binding_decl(import_binding_t *bindings, size_t count, const char *name, size_t name_len) {
+  import_binding_t *binding = find_import_binding(bindings, count, name, name_len);
+  if (binding) binding->later_decl = true;
+}
+
+static size_t mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *src, size_t len, size_t i) {
+  size_t j = skim_skip_ws_comments(src, len, i + 6);
+  if (skim_word_at(src, len, j, "type")) return skim_skip_statement_like(src, len, i);
+
+  if (j < len && src[j] == '{') {
+    size_t close = skim_skip_balanced(src, len, j, '{', '}');
+    size_t item_start = j + 1;
+    for (size_t p = j + 1; p <= close - 1; p++) {
+      if (p < close - 1 && src[p] != ',') continue;
+      size_t a = trim_left(src, len, item_start, p);
+      size_t b = trim_right(src, a, p);
+      if (a < b && !specifier_is_explicit_type(src, a, b)) {
+        char *local = local_name_from_specifier(src, a, b);
+        if (local) mark_import_binding_decl(bindings, count, local, strlen(local));
+        free(local);
+      }
+      item_start = p + 1;
+    }
+    return skim_skip_statement_like(src, len, close);
+  }
+
+  if (j < len && src[j] == '*') {
+    size_t as_pos = skim_skip_ws_comments(src, len, j + 1);
+    if (skim_word_at(src, len, as_pos, "as")) {
+      size_t name_start = 0, name_end = 0;
+      skim_parse_identifier(src, len, as_pos + 2, &name_start, &name_end);
+      if (name_start != name_end) mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+    }
+    return skim_skip_statement_like(src, len, j);
+  }
+
+  size_t name_start = 0, name_end = 0;
+  size_t after_name = skim_parse_identifier(src, len, j, &name_start, &name_end);
+  if (name_start != name_end) mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+
+  size_t comma = skim_skip_ws_comments(src, len, after_name);
+  if (comma < len && src[comma] == ',') {
+    size_t brace = skim_skip_ws_comments(src, len, comma + 1);
+    if (brace < len && src[brace] == '{') {
+      size_t close = skim_skip_balanced(src, len, brace, '{', '}');
+      size_t item_start = brace + 1;
+      for (size_t p = brace + 1; p <= close - 1; p++) {
+        if (p < close - 1 && src[p] != ',') continue;
+        size_t a = trim_left(src, len, item_start, p);
+        size_t b = trim_right(src, a, p);
+        if (a < b && !specifier_is_explicit_type(src, a, b)) {
+          char *local = local_name_from_specifier(src, a, b);
+          if (local) mark_import_binding_decl(bindings, count, local, strlen(local));
+          free(local);
+        }
+        item_start = p + 1;
+      }
+      return skim_skip_statement_like(src, len, close);
+    }
+  }
+  return skim_skip_statement_like(src, len, i);
+}
+
+static bool value_decl_keyword_at(const char *src, size_t len, size_t i, size_t *keyword_len) {
+  static const char *decls[] = {"const", "let", "var", "function", "class", "enum", "namespace"};
+  for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
+    if (skim_word_at(src, len, i, decls[d])) {
+      *keyword_len = strlen(decls[d]);
+      return true;
+    }
+  }
+  return false;
+}
+
+static void analyze_import_bindings(const char *src, size_t len, size_t start, import_binding_t *bindings, size_t count) {
+  size_t live = 0;
+  for (size_t b = 0; b < count; b++)
+    live += !bindings[b].later_decl && !bindings[b].value_use;
+  if (live == 0) return;
+
+  for (size_t i = start; i < len;) {
+    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
+      i = skim_skip_string_raw(src, len, i);
+      continue;
+    }
+    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
+      i += 2;
+      while (i < len && src[i] != '\n')
+        i++;
+      continue;
+    }
+    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
+        i++;
+      if (i + 1 < len) i += 2;
+      continue;
+    }
+    if (!skim_is_id_start(src[i])) {
+      i++;
+      continue;
+    }
+
+    size_t ident_start = i;
+    i++;
+    while (i < len && skim_is_id_part(src[i]))
+      i++;
+    size_t ident_end = i;
+    size_t ident_len = ident_end - ident_start;
+
+    if (ident_len == 6 && memcmp(src + ident_start, "import", 6) == 0) {
+      i = mark_import_decl_bindings(bindings, count, src, len, ident_start);
+      continue;
+    }
+
+    size_t keyword_len = 0;
+    if (value_decl_keyword_at(src, len, ident_start, &keyword_len)) {
+      size_t name_start = 0, name_end = 0;
+      skim_parse_identifier(src, len, ident_start + keyword_len, &name_start, &name_end);
+      if (name_start != name_end) mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+    }
+
+    import_binding_t *binding = find_import_binding(bindings, count, src + ident_start, ident_len);
+    if (binding && !occurrence_is_type_position(src, ident_start)) binding->value_use = true;
+  }
+}
+
+static bool import_binding_should_keep(const import_binding_t *binding, const char *src, size_t import_pos) {
+  return binding->value_use && !binding->later_decl &&
+         !skim_decl_seen_before(src, binding->local, import_pos, SKIM_DECL_VALUE);
+}
+
 static bool try_export_named(skim_str_t *out, const char *src, size_t len, size_t i, size_t brace, size_t *out_end) {
   (void)i;
   size_t close = skim_skip_balanced(src, len, brace, '{', '}');
@@ -611,25 +791,28 @@ static bool try_named_import(skim_str_t *out, const char *src, size_t len, size_
     return true;
   }
 
-  skim_str_t kept = {0};
+  import_binding_t *bindings = NULL;
+  size_t binding_count = 0;
+  size_t binding_cap = 0;
   size_t item_start = brace + 1;
-  size_t kept_count = 0;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
     size_t a = trim_left(src, len, item_start, p);
     size_t b = trim_right(src, a, p);
     if (a < b && !specifier_is_explicit_type(src, a, b)) {
-      char *local = local_name_from_specifier(src, a, b);
-      bool keep = local && identifier_has_value_use(src, len, end, local) &&
-                  !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
-                  !has_value_declaration(src + end, len - end, local);
-      free(local);
-      if (keep) {
-        if (kept_count++) skim_str_puts(&kept, ", ");
-        skim_str_putn(&kept, src + a, b - a);
-      }
+      push_import_binding(&bindings, &binding_count, &binding_cap, local_name_from_specifier(src, a, b), a, b);
     }
     item_start = p + 1;
+  }
+
+  analyze_import_bindings(src, len, end, bindings, binding_count);
+
+  skim_str_t kept = {0};
+  size_t kept_count = 0;
+  for (size_t b = 0; b < binding_count; b++) {
+    if (!import_binding_should_keep(&bindings[b], src, i)) continue;
+    if (kept_count++) skim_str_puts(&kept, ", ");
+    skim_str_putn(&kept, src + bindings[b].spec_start, bindings[b].spec_end - bindings[b].spec_start);
   }
 
   if (kept_count > 0) {
@@ -642,6 +825,7 @@ static bool try_named_import(skim_str_t *out, const char *src, size_t len, size_
     skim_emit_preserved_newlines(out, src, i, end);
   }
   free(kept.data);
+  free_import_bindings(bindings, binding_count);
   return true;
 }
 
@@ -663,29 +847,32 @@ static bool try_default_named_import(
   size_t module_end = end;
   if (module_end > module_start && src[module_end - 1] == ';') module_end--;
 
-  char *default_name = skim_slice_dup(src, default_start, default_end);
-  bool keep_default = identifier_has_value_use(src, len, end, default_name);
-  free(default_name);
-
-  skim_str_t kept = {0};
+  import_binding_t *bindings = NULL;
+  size_t binding_count = 0;
+  size_t binding_cap = 0;
+  push_import_binding(
+    &bindings, &binding_count, &binding_cap, skim_slice_dup(src, default_start, default_end), default_start, default_end
+  );
   size_t item_start = brace + 1;
-  size_t kept_count = 0;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
     size_t a = trim_left(src, len, item_start, p);
     size_t b = trim_right(src, a, p);
     if (a < b && !specifier_is_explicit_type(src, a, b)) {
-      char *local = local_name_from_specifier(src, a, b);
-      bool keep = local && identifier_has_value_use(src, len, end, local) &&
-                  !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
-                  !has_value_declaration(src + end, len - end, local);
-      free(local);
-      if (keep) {
-        if (kept_count++) skim_str_puts(&kept, ", ");
-        skim_str_putn(&kept, src + a, b - a);
-      }
+      push_import_binding(&bindings, &binding_count, &binding_cap, local_name_from_specifier(src, a, b), a, b);
     }
     item_start = p + 1;
+  }
+
+  analyze_import_bindings(src, len, end, bindings, binding_count);
+  bool keep_default = binding_count > 0 && import_binding_should_keep(&bindings[0], src, i);
+
+  skim_str_t kept = {0};
+  size_t kept_count = 0;
+  for (size_t b = 1; b < binding_count; b++) {
+    if (!import_binding_should_keep(&bindings[b], src, i)) continue;
+    if (kept_count++) skim_str_puts(&kept, ", ");
+    skim_str_putn(&kept, src + bindings[b].spec_start, bindings[b].spec_end - bindings[b].spec_start);
   }
 
   if (keep_default || kept_count > 0) {
@@ -706,6 +893,7 @@ static bool try_default_named_import(
     skim_emit_preserved_newlines(out, src, i, end);
   }
   free(kept.data);
+  free_import_bindings(bindings, binding_count);
   return true;
 }
 

@@ -509,6 +509,14 @@ bool skim_syntax_item_needs_statement_semicolon(
   return item_is_variable_decl(src, len, i) || item_starts_statement_expression(src, len, i);
 }
 
+static size_t item_end_for_kind(const char *src, size_t len, size_t content_start, skim_ast_item_kind_t kind) {
+  if (item_has_own_braced_body(src, len, content_start)) return braced_item_end(src, len, content_start);
+  if (item_is_variable_decl(src, len, content_start)) return variable_item_end(src, len, content_start);
+  if (kind == SKIM_AST_ITEM_TYPE_ALIAS) return type_alias_item_end(src, len, content_start);
+  if (kind == SKIM_AST_ITEM_DECLARE) return skim_skip_statement_like(src, len, content_start);
+  return text_item_end(src, len, content_start);
+}
+
 void skim_parse_program(skim_ast_program_t *program, const char *src, size_t len) {
   *program = (skim_ast_program_t){.src = src, .len = len};
   for (size_t i = 0; i < len;) {
@@ -522,14 +530,8 @@ void skim_parse_program(skim_ast_program_t *program, const char *src, size_t len
 
     skim_ast_item_kind_t kind = classify_item(src, len, first);
     record_decl(src, len, content_start);
-    size_t end = item_has_own_braced_body(src, len, content_start)
-      ? braced_item_end(src, len, content_start)
-      : (item_is_variable_decl(src, len, content_start)
-          ? variable_item_end(src, len, content_start)
-          : (kind == SKIM_AST_ITEM_TYPE_ALIAS ? type_alias_item_end(src, len, content_start)
-            : kind == SKIM_AST_ITEM_DECLARE ? skim_skip_statement_like(src, len, content_start)
-            : text_item_end(src, len, content_start)));
-  if (end <= content_start) end = content_start + 1;
+    size_t end = item_end_for_kind(src, len, content_start, kind);
+    if (end <= content_start) end = content_start + 1;
     push_item(program, kind, start, content_start, end);
     i = end;
   }
