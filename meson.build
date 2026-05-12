@@ -1,5 +1,5 @@
 project('skim', 'c',
-  version: '0.0.4',
+  version: '0.0.5',
   license: 'MIT',
   default_options: [
     'c_std=c23',
@@ -40,11 +40,24 @@ skim_dep = declare_dependency(
   include_directories: public_inc,
 )
 
+libskim_static = static_library('skim_static',
+  skim_sources,
+  include_directories: [public_inc, private_inc],
+  c_args: ['-fvisibility=hidden'],
+  override_options: ['optimization=3'],
+)
+
+skim_cli_dep = declare_dependency(
+  link_with: libskim_static,
+  include_directories: public_inc,
+)
+
 skim_cli = executable('skim',
   files('tools/skim.c'),
-  dependencies: skim_dep,
+  dependencies: skim_cli_dep,
   include_directories: private_inc,
   c_args: ['-DSKIM_VERSION="' + meson.project_version() + '"'],
+  override_options: ['optimization=3'],
   install: true,
 )
 

@@ -31,18 +31,29 @@ typedef struct {
 
 static enum_known_member_t *known_members;
 static size_t known_member_count;
-static size_t known_member_buckets[4096];
 static int enum_expression_depth;
 static bool current_enum_inline_refs;
 static size_t current_enum_scope_start;
 static int enum_suppress_depth;
-
 static void value_free(enum_value_t v);
 
-static void clear_known_member_buckets(void) {
-  for (size_t i = 0; i < sizeof(known_member_buckets) / sizeof(known_member_buckets[0]); i++) {
-    known_member_buckets[i] = (size_t)-1;
+static skim_transform_state_t *enum_state(void) {
+  return skim_state ? skim_state : &skim_default_state;
+}
+
+static size_t *known_member_buckets(void) {
+  skim_transform_state_t *state = enum_state();
+  if (!state->known_member_buckets) {
+    state->known_member_buckets = malloc(sizeof(*state->known_member_buckets) * SKIM_BUCKET_COUNT);
+    if (!state->known_member_buckets) skim_die("out of memory");
   }
+  return state->known_member_buckets;
+}
+
+static void clear_known_member_buckets(void) {
+  size_t *buckets = known_member_buckets();
+  for (size_t i = 0; i < SKIM_BUCKET_COUNT; i++)
+    buckets[i] = (size_t)-1;
 }
 
 static size_t enum_member_hash(const char *enum_name, size_t enum_len, const char *member_name, size_t member_len) {
@@ -57,7 +68,7 @@ static size_t enum_member_hash(const char *enum_name, size_t enum_len, const cha
     h ^= (unsigned char)member_name[i];
     h *= 1099511628211ull;
   }
-  return h & ((sizeof(known_member_buckets) / sizeof(known_member_buckets[0])) - 1);
+  return h & (SKIM_BUCKET_COUNT - 1);
 }
 
 void skim_ts_enum_reset(void) {
@@ -175,6 +186,7 @@ static void remember_member(const char *enum_name, const char *member_name, enum
   size_t enum_len = strlen(enum_name);
   size_t member_len = strlen(member_name);
   size_t bucket = enum_member_hash(enum_name, enum_len, member_name, member_len);
+  size_t *buckets = known_member_buckets();
   known_members[known_member_count].enum_name = skim_slice_dup(enum_name, 0, enum_len);
   known_members[known_member_count].member_name = skim_slice_dup(member_name, 0, member_len);
   known_members[known_member_count].enum_name_len = enum_len;
@@ -182,8 +194,8 @@ static void remember_member(const char *enum_name, const char *member_name, enum
   known_members[known_member_count].value = value_clone(value);
   known_members[known_member_count].inline_ref = current_enum_inline_refs;
   known_members[known_member_count].scope_start = current_enum_scope_start;
-  known_members[known_member_count].next_hash = known_member_buckets[bucket];
-  known_member_buckets[bucket] = known_member_count;
+  known_members[known_member_count].next_hash = buckets[bucket];
+  buckets[bucket] = known_member_count;
   known_member_count++;
 }
 
@@ -237,7 +249,8 @@ static bool lookup_qualified_member_span(
   size_t member_len,
   enum_value_t *out
 ) {
-  for (size_t i = known_member_buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
+  size_t *buckets = known_member_buckets();
+  for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
        i = known_members[i].next_hash) {
     enum_known_member_t *m = &known_members[i];
     if (m->enum_name_len != enum_len || m->member_name_len != member_len) continue;
@@ -261,7 +274,8 @@ static bool lookup_inline_member_span(
   size_t member_len,
   enum_value_t *out
 ) {
-  for (size_t i = known_member_buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
+  size_t *buckets = known_member_buckets();
+  for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
        i = known_members[i].next_hash) {
     enum_known_member_t *m = &known_members[i];
     if (m->enum_name_len != enum_len || m->member_name_len != member_len) continue;
@@ -277,7 +291,8 @@ static bool lookup_inline_member_span(
 static bool known_enum_member_name(const char *enum_name, const char *member_name) {
   size_t enum_len = strlen(enum_name);
   size_t member_len = strlen(member_name);
-  for (size_t i = known_member_buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
+  size_t *buckets = known_member_buckets();
+  for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
        i = known_members[i].next_hash) {
     enum_known_member_t *m = &known_members[i];
     if (

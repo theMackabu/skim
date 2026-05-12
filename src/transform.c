@@ -5,11 +5,21 @@
 #include <string.h>
 
 skim_options_t skim_options;
-skim_source_mode_t skim_source_mode = SKIM_SOURCE_MODULE;
+skim_transform_state_t *skim_state;
+skim_transform_state_t skim_default_state;
+
 static size_t transform_depth;
+skim_source_mode_t skim_source_mode = SKIM_SOURCE_MODULE;
 
 static bool source_mode_needs_module_marker(void) {
   return skim_source_mode == SKIM_SOURCE_MODULE;
+}
+
+void skim_transform_state_free(skim_transform_state_t *state) {
+  if (!state) return;
+  free(state->decl_buckets);
+  free(state->known_member_buckets);
+  *state = (skim_transform_state_t){0};
 }
 
 static bool cleanup_is_assignment_equal(const char *src, size_t len, size_t i) {

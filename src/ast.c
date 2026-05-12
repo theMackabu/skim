@@ -16,11 +16,24 @@ typedef struct {
 static skim_decl_t *decls;
 static size_t decl_count;
 static size_t decl_cap;
-static size_t decl_buckets[4096];
+
+static skim_transform_state_t *decl_state(void) {
+  return skim_state ? skim_state : &skim_default_state;
+}
+
+static size_t *decl_buckets(void) {
+  skim_transform_state_t *state = decl_state();
+  if (!state->decl_buckets) {
+    state->decl_buckets = malloc(sizeof(*state->decl_buckets) * SKIM_BUCKET_COUNT);
+    if (!state->decl_buckets) skim_die("out of memory");
+  }
+  return state->decl_buckets;
+}
 
 static void clear_decl_buckets(void) {
-  for (size_t i = 0; i < sizeof(decl_buckets) / sizeof(decl_buckets[0]); i++)
-    decl_buckets[i] = (size_t)-1;
+  size_t *buckets = decl_buckets();
+  for (size_t i = 0; i < SKIM_BUCKET_COUNT; i++)
+    buckets[i] = (size_t)-1;
 }
 
 static size_t decl_hash(const char *name, size_t len) {
@@ -29,7 +42,7 @@ static size_t decl_hash(const char *name, size_t len) {
     h ^= (unsigned char)name[i];
     h *= 1099511628211ull;
   }
-  return h & ((sizeof(decl_buckets) / sizeof(decl_buckets[0])) - 1);
+  return h & (SKIM_BUCKET_COUNT - 1);
 }
 
 void skim_decl_reset(void) {
@@ -51,19 +64,21 @@ void skim_decl_remember(const char *src, const char *name_start, const char *nam
     decl_cap = cap;
   }
   size_t bucket = decl_hash(name_start, name_len);
+  size_t *buckets = decl_buckets();
   decls[decl_count].src = src;
   decls[decl_count].name = name_start;
   decls[decl_count].name_len = name_len;
   decls[decl_count].pos = pos;
   decls[decl_count].flags = flags;
-  decls[decl_count].next = decl_buckets[bucket];
-  decl_buckets[bucket] = decl_count;
+  decls[decl_count].next = buckets[bucket];
+  buckets[bucket] = decl_count;
   decl_count++;
 }
 
 bool skim_decl_seen_before(const char *src, const char *name, size_t pos, unsigned flags) {
   size_t name_len = strlen(name);
-  for (size_t i = decl_buckets[decl_hash(name, name_len)]; i != (size_t)-1; i = decls[i].next) {
+  size_t *buckets = decl_buckets();
+  for (size_t i = buckets[decl_hash(name, name_len)]; i != (size_t)-1; i = decls[i].next) {
     if (decls[i].src != src || decls[i].pos >= pos || !(decls[i].flags & flags)) continue;
     if (decls[i].name_len != name_len) continue;
     if (memcmp(decls[i].name, name, name_len) == 0) return true;
@@ -81,7 +96,8 @@ void skim_ast_print_program(const skim_ast_program_t *program, skim_str_t *out) 
     skim_transform_range(program->src, program->len, item->start, item->end, out);
     if (
       i + 1 < program->item_count && skim_syntax_item_needs_statement_semicolon(item, program->src, program->len, out)
-    ) skim_str_putc(out, ';');
+    )
+      skim_str_putc(out, ';');
   }
 }
 
