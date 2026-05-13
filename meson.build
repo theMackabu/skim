@@ -10,6 +10,8 @@ project('skim', 'c',
 
 public_inc = include_directories('.')
 private_inc = include_directories('include')
+cc = meson.get_compiler('c')
+math_dep = cc.find_library('m', required: false)
 
 skim_sources = files(
   'src/ast.c',
@@ -31,6 +33,7 @@ skim_sources = files(
 libskim = library('skim',
   skim_sources,
   include_directories: [public_inc, private_inc],
+  dependencies: math_dep,
   c_args: ['-fvisibility=hidden'],
   install: true,
 )
@@ -38,11 +41,13 @@ libskim = library('skim',
 skim_dep = declare_dependency(
   link_with: libskim,
   include_directories: public_inc,
+  dependencies: math_dep,
 )
 
 libskim_static = static_library('skim_static',
   skim_sources,
   include_directories: [public_inc, private_inc],
+  dependencies: math_dep,
   c_args: ['-fvisibility=hidden'],
   override_options: ['optimization=3'],
 )
@@ -50,6 +55,7 @@ libskim_static = static_library('skim_static',
 skim_cli_dep = declare_dependency(
   link_with: libskim_static,
   include_directories: public_inc,
+  dependencies: math_dep,
 )
 
 skim_cli = executable('skim',
