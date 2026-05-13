@@ -4,7 +4,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#if defined(_WIN32)
+#if defined(SKIM_STATIC)
+#  define SKIM_API
+#elif defined(_WIN32)
 #  if defined(SKIM_BUILDING_DLL)
 #    define SKIM_API __declspec(dllexport)
 #  else
