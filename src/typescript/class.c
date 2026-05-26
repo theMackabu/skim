@@ -685,6 +685,7 @@ static void emit_preserved_class_member_prefix(
   size_t decorators_end,
   size_t member_prefix_start,
   bool saw_static,
+  bool saw_async,
   bool saw_override,
   bool saw_accessor
 ) {
@@ -697,6 +698,7 @@ static void emit_preserved_class_member_prefix(
     skim_str_putc(out, src[leading++]);
   }
   if (saw_static) skim_str_puts(out, "static ");
+  if (saw_async) skim_str_puts(out, "async ");
   if (saw_override && saw_accessor) skim_str_puts(out, "override ");
   if (saw_accessor) skim_str_puts(out, "accessor ");
 }
@@ -756,6 +758,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
   bool saw_abstract = false;
   bool saw_declare = false;
   bool saw_static = false;
+  bool saw_async = false;
   bool saw_override = false;
   bool saw_accessor = false;
   bool saw_erased_modifier = false;
@@ -784,6 +787,17 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     j += mod_len;
   }
   j = skim_skip_ws_comments(src, len, j);
+  if (skim_word_at(src, len, j, "async")) {
+    size_t after_async = skim_skip_ws_comments(src, len, j + 5);
+    if (
+      after_async < end &&
+      (src[after_async] == '*' || src[after_async] == '[' || src[after_async] == '#' ||
+       skim_is_id_start(src[after_async]))
+    ) {
+      saw_async = true;
+      j = after_async;
+    }
+  }
   size_t member_prefix_start = j;
   if (j < end && src[j] == '*') j = skim_skip_ws_comments(src, len, j + 1);
 
@@ -865,7 +879,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     }
     if (j < end && src[j] == '{') {
       emit_preserved_class_member_prefix(
-        out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+        out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
       );
       size_t prefix_end = member_name_end;
       while (prefix_end > member_prefix_start && isspace((unsigned char)src[prefix_end - 1]))
@@ -912,7 +926,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         if (stmt_end > end) stmt_end = end;
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -930,7 +944,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         }
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -949,7 +963,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         }
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -967,7 +981,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         }
         if (saw_static || saw_accessor) {
           emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
           );
           skim_transform_range(src, len, member_prefix_start, colon, out);
         } else {
@@ -986,14 +1000,14 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     size_t stmt_end = skim_skip_statement_like(src, len, j);
     if (stmt_end > end) stmt_end = end;
     emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
     );
     skim_transform_range(src, len, member_prefix_start, stmt_end, out);
     *io = stmt_end;
     return true;
   } else if (saw_erased_modifier && (j >= end || src[j] == ';' || src[j] == '\n' || src[j] == '\r' || src[j] == '}')) {
     emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, saw_accessor
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
     );
     skim_transform_range(src, len, member_prefix_start, member_name_end, out);
     if (j < end && src[j] == ';') {
@@ -1004,7 +1018,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     return true;
   } else if (saw_accessor && (j >= end || src[j] == ';' || src[j] == '\n' || src[j] == '\r' || src[j] == '}')) {
     emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, true
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, true
     );
     skim_transform_range(src, len, member_prefix_start, member_name_end, out);
     if (j < end && src[j] == ';') {
@@ -1017,7 +1031,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
     size_t stmt_end = skim_skip_statement_like(src, len, j);
     if (stmt_end > end) stmt_end = end;
     emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_override, true
+      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, true
     );
     skim_transform_range(src, len, member_prefix_start, stmt_end, out);
     *io = stmt_end;

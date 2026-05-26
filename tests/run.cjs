@@ -20,6 +20,11 @@ function assertOk(result, label) {
   if (result.status !== 0) throw new Error(`${label} failed with ${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
 }
 
+function assertIncludes(text, expected, label) {
+  if (!text.includes(expected))
+    throw new Error(`${label} missing ${JSON.stringify(expected)}\n\nGenerated JS:\n${text}`);
+}
+
 const versionResult = run(bin, ['--version']);
 assertOk(versionResult, 'skim --version');
 if (versionResult.stdout !== `skim ${version}\n`)
@@ -44,6 +49,13 @@ const cases = [
 
 for (const support of fs.readdirSync(path.join(here, 'fixtures')).filter(name => name.endsWith('.mjs') || name.endsWith('.cjs'))) {
   fs.copyFileSync(path.join(here, 'fixtures', support), path.join(tmp, support));
+}
+
+{
+  const source = path.join(here, 'fixtures', 'decorated_async.ts');
+  const strip = run(bin, [source]);
+  assertOk(strip, 'strip decorated_async.ts');
+  assertIncludes(strip.stdout, '@dec\n  async run(', 'decorated_async.ts');
 }
 
 for (const [fixture, expected] of cases) {
