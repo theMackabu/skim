@@ -1162,9 +1162,23 @@ static bool class_reserved_word_before_method_call(const char *src, size_t len, 
 
 static void transform_class_body_range(const char *src, size_t len, size_t start, size_t end, skim_str_t *out) {
   int depth = 0;
+  int paren_depth = 0;
+  int bracket_depth = 0;
   for (size_t i = start; i < end;) {
     if (depth > 0) {
       copy_nested_class_body_token(out, src, len, end, &i, &depth);
+      continue;
+    }
+    if (paren_depth > 0 || bracket_depth > 0) {
+      if (copy_class_body_common_token(out, src, len, end, &i, true)) continue;
+      char c = src[i];
+      if (c == '(') paren_depth++;
+      else if (c == ')' && paren_depth > 0) paren_depth--;
+      else if (c == '[') bracket_depth++;
+      else if (c == ']' && bracket_depth > 0) bracket_depth--;
+      if (skim_emit_copy_plain_identifier(out, src, end, &i)) continue;
+      if (skim_emit_copy_plain_span(out, src, end, &i)) continue;
+      skim_str_putc(out, src[i++]);
       continue;
     }
     if (copy_class_top_level_space(out, src, len, end, &i)) continue;
@@ -1197,6 +1211,8 @@ static void transform_class_body_range(const char *src, size_t len, size_t start
       continue;
     }
     if (src[i] != '@' && skim_transform_try_at(out, src, len, &i)) continue;
+    if (src[i] == '(') paren_depth++;
+    else if (src[i] == '[') bracket_depth++;
     if (src[i] == '{') depth++;
     if (depth > 0 && skim_emit_copy_plain_identifier(out, src, end, &i)) continue;
     if (depth > 0 && skim_emit_copy_plain_span(out, src, end, &i)) continue;

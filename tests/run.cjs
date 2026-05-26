@@ -26,7 +26,7 @@ if (versionResult.stdout !== `skim ${version}\n`)
   throw new Error(`--version mismatch\nexpected: skim ${version}\nactual:   ${versionResult.stdout}`);
 
 const cases = [
-  ['annotations.ts', 'ant:6\n'],
+  ['annotations.ts', 'ant:6 10,none\n'],
   ['class_modifiers.ts', 'ready 3\n'],
   ['enum.ts', '1 2 blue\n'],
   ['enum_refs.ts', '1 3\n'],
