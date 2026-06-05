@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+static size_t export_type_statement_end(const char *src, size_t len, size_t i);
+
 static size_t trim_left(const char *src, size_t len, size_t i, size_t end) {
   (void)len;
   while (i < end && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r'))
@@ -33,6 +35,136 @@ static char prev_non_ws(const char *src, size_t pos) {
   return pos > 0 ? src[pos - 1] : '\0';
 }
 
+static size_t prev_non_ws_pos(const char *src, size_t pos) {
+  while (pos > 0 && (src[pos - 1] == ' ' || src[pos - 1] == '\t' || src[pos - 1] == '\n' || src[pos - 1] == '\r'))
+    pos--;
+  return pos > 0 ? pos - 1 : (size_t)-1;
+}
+
+static bool word_before_pos(const char *src, size_t pos, const char *word) {
+  while (pos > 0 && (src[pos - 1] == ' ' || src[pos - 1] == '\t' || src[pos - 1] == '\n' || src[pos - 1] == '\r'))
+    pos--;
+  size_t end = pos;
+  while (pos > 0 && skim_is_id_part(src[pos - 1]))
+    pos--;
+  size_t n = strlen(word);
+  return end - pos == n && memcmp(src + pos, word, n) == 0;
+}
+
+static bool colon_looks_like_value_object_property(const char *src, size_t colon) {
+  if (prev_non_ws(src, colon) == ')') return false;
+
+  int paren = 0, bracket = 0, brace = 0;
+  for (size_t k = colon; k > 0;) {
+    char c = src[--k];
+    if (c == ')') paren++;
+    else if (c == '(') {
+      if (paren > 0) paren--;
+      else if (bracket == 0 && brace == 0) return false;
+    } else if (c == ']') bracket++;
+    else if (c == '[') {
+      if (bracket > 0) bracket--;
+    } else if (c == '}') brace++;
+    else if (c == '{') {
+      if (brace > 0) {
+        brace--;
+      } else if (paren == 0 && bracket == 0) {
+        size_t before = prev_non_ws_pos(src, k);
+        if (before == (size_t)-1) return false;
+
+        char prev = src[before];
+        if (prev == ':' && colon_looks_like_value_object_property(src, before)) return true;
+        return prev == '=' || prev == '(' || prev == ',' || prev == '[' || prev == '?' ||
+               word_before_pos(src, before + 1, "return") || word_before_pos(src, before + 1, "yield");
+      }
+    } else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) {
+      return false;
+    }
+  }
+  return false;
+}
+
+static bool colon_looks_like_ternary(const char *src, size_t colon) {
+  int paren = 0, bracket = 0, brace = 0;
+  for (size_t k = colon; k > 0;) {
+    char c = src[--k];
+    if (c == ')') paren++;
+    else if (c == '(' && paren > 0) paren--;
+    else if (c == '(' && paren == 0 && bracket == 0 && brace == 0) return false;
+    else if (c == ']') bracket++;
+    else if (c == '[' && bracket > 0) bracket--;
+    else if (c == '}') brace++;
+    else if (c == '{') {
+      if (brace == 0 && paren == 0 && bracket == 0) return false;
+      if (brace > 0) brace--;
+    } else if (c == '?' && paren == 0 && bracket == 0 && brace == 0) {
+      if (k + 1 == colon && k > 0 && skim_is_id_part(src[k - 1])) return false;
+      return true;
+    } else if ((c == ';' || c == ':') && paren == 0 && bracket == 0 && brace == 0) {
+      return false;
+    }
+  }
+  return false;
+}
+
+static bool colon_looks_like_case_label(const char *src, size_t colon) {
+  size_t k = colon;
+  while (k > 0 && src[k - 1] != '\n' && src[k - 1] != '\r' && src[k - 1] != ';')
+    k--;
+  size_t line = skim_skip_ws(src, colon, k);
+  if (!skim_word_at(src, colon, line, "case") && !skim_word_at(src, colon, line, "default")) return false;
+
+  int paren = 0, bracket = 0, brace = 0;
+  for (size_t p = line; p < colon; p++) {
+    char c = src[p];
+    if (c == '\'' || c == '"' || c == '`') {
+      p = skim_skip_string_raw(src, colon, p) - 1;
+      continue;
+    }
+    if (c == '(') paren++;
+    else if (c == ')' && paren > 0) paren--;
+    else if (c == '[') bracket++;
+    else if (c == ']' && bracket > 0) bracket--;
+    else if (c == '{') brace++;
+    else if (c == '}' && brace > 0) brace--;
+  }
+  return paren == 0 && bracket == 0 && brace == 0;
+}
+
+static bool colon_looks_like_statement_label(const char *src, size_t len, size_t colon) {
+  size_t k = colon;
+  while (k > 0 && (src[k - 1] == ' ' || src[k - 1] == '\t'))
+    k--;
+  size_t start = k;
+  while (start > 0 && skim_is_id_part(src[start - 1]))
+    start--;
+  if (start == k) return false;
+
+  size_t line = start;
+  while (line > 0 && (src[line - 1] == ' ' || src[line - 1] == '\t'))
+    line--;
+  if (
+    line > 0 && src[line - 1] != '\n' && src[line - 1] != '\r' && src[line - 1] != '{' && src[line - 1] != '}' &&
+    src[line - 1] != ':'
+  )
+    return false;
+
+  size_t before_line = line;
+  while (before_line > 0 && (src[before_line - 1] == ' ' || src[before_line - 1] == '\t' ||
+                             src[before_line - 1] == '\n' || src[before_line - 1] == '\r'))
+    before_line--;
+  if (before_line > 0 && (src[before_line - 1] == '(' || src[before_line - 1] == ',')) return false;
+
+  size_t next = skim_skip_ws(src, len, colon + 1);
+  return next >= len || src[next] == '{' || skim_word_at(src, len, next, "while") ||
+         skim_word_at(src, len, next, "for") || skim_word_at(src, len, next, "if") ||
+         skim_word_at(src, len, next, "switch") || skim_word_at(src, len, next, "do") ||
+         skim_word_at(src, len, next, "try") || skim_word_at(src, len, next, "var") ||
+         skim_word_at(src, len, next, "let") || skim_word_at(src, len, next, "const") ||
+         skim_word_at(src, len, next, "typeof") || skim_word_at(src, len, next, "break") ||
+         skim_word_at(src, len, next, "continue");
+}
+
 static bool typeof_before_is_type_query(const char *src, size_t pos) {
   while (pos > 0 && (src[pos - 1] == ' ' || src[pos - 1] == '\t' || src[pos - 1] == '\n' || src[pos - 1] == '\r'))
     pos--;
@@ -44,45 +176,48 @@ static bool typeof_before_is_type_query(const char *src, size_t pos) {
   return prev == ':' || prev == '|' || prev == '&' || prev == '<';
 }
 
-static bool occurrence_is_type_position(const char *src, size_t pos) {
+static bool occurrence_is_type_position(const char *src, size_t len, size_t pos) {
   if (
     word_before_is(src, pos, "as") || word_before_is(src, pos, "satisfies") || word_before_is(src, pos, "type") ||
     word_before_is(src, pos, "interface") || typeof_before_is_type_query(src, pos)
   )
     return true;
-  char prev = prev_non_ws(src, pos);
+  size_t prev_pos = prev_non_ws_pos(src, pos);
+  char prev = prev_pos == (size_t)-1 ? '\0' : src[prev_pos];
+  if (
+    prev == ':' &&
+    (colon_looks_like_ternary(src, prev_pos) || colon_looks_like_case_label(src, prev_pos) ||
+     colon_looks_like_statement_label(src, len, prev_pos) || colon_looks_like_value_object_property(src, prev_pos))
+  )
+    return false;
   return prev == ':' || prev == '|' || prev == '&' || prev == '<';
 }
 
-static bool identifier_has_value_use(const char *src, size_t len, size_t start, const char *name) {
-  size_t n = strlen(name);
-  for (size_t i = start; i + n <= len;) {
-    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-      i = skim_skip_string_raw(src, len, i);
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
-    if (
-      memcmp(src + i, name, n) == 0 && (i == 0 || !skim_is_id_part(src[i - 1])) &&
-      (i + n == len || !skim_is_id_part(src[i + n]))
-    ) {
-      if (!occurrence_is_type_position(src, i)) return true;
-      i += n;
-      continue;
-    }
-    i++;
+static bool statement_keyword_can_start_here(const char *src, size_t pos) {
+  size_t line = pos;
+  while (line > 0 && src[line - 1] != '\n' && src[line - 1] != '\r')
+    line--;
+  size_t first = line;
+  while (first < pos && (src[first] == ' ' || src[first] == '\t'))
+    first++;
+  if (first == pos) return true;
+
+  char prev = prev_non_ws(src, pos);
+  return prev == '\0' || prev == ';' || prev == '{' || prev == '}';
+}
+
+static bool type_statement_keyword_at(const char *src, size_t len, size_t pos) {
+  if (!statement_keyword_can_start_here(src, pos) && !word_before_is(src, pos, "export")) return false;
+  if (skim_word_at(src, len, pos, "type")) {
+    size_t name_start = 0, name_end = 0;
+    size_t after_name = skim_parse_identifier(src, len, skim_skip_ws_comments(src, len, pos + 4), &name_start, &name_end);
+    size_t eq = skim_skip_ws_comments(src, len, after_name);
+    return name_start != name_end && eq < len && src[eq] == '=';
+  }
+  if (skim_word_at(src, len, pos, "interface")) {
+    size_t name_start = 0, name_end = 0;
+    skim_parse_identifier(src, len, skim_skip_ws_comments(src, len, pos + 9), &name_start, &name_end);
+    return name_start != name_end;
   }
   return false;
 }
@@ -216,6 +351,7 @@ typedef struct {
   size_t local_len;
   size_t spec_start;
   size_t spec_end;
+  bool type_use;
   bool value_use;
   bool later_decl;
 } import_binding_t;
@@ -258,6 +394,44 @@ find_import_binding(import_binding_t *bindings, size_t count, const char *name, 
     if (bindings[i].local_len == name_len && memcmp(bindings[i].local, name, name_len) == 0) return &bindings[i];
   }
   return NULL;
+}
+
+static void mark_bindings_in_type_range(
+  const char *src,
+  size_t len,
+  size_t start,
+  size_t end,
+  import_binding_t *bindings,
+  size_t count
+) {
+  for (size_t i = start; i < end && i < len;) {
+    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
+      i = skim_skip_string_raw(src, len, i);
+      continue;
+    }
+    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
+      i += 2;
+      while (i < len && src[i] != '\n')
+        i++;
+      continue;
+    }
+    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
+        i++;
+      if (i + 1 < len) i += 2;
+      continue;
+    }
+    if (skim_is_id_start(src[i])) {
+      size_t ident_start = i++;
+      while (i < end && i < len && skim_is_id_part(src[i]))
+        i++;
+      import_binding_t *binding = find_import_binding(bindings, count, src + ident_start, i - ident_start);
+      if (binding) binding->type_use = true;
+      continue;
+    }
+    i++;
+  }
 }
 
 static void mark_import_binding_decl(import_binding_t *bindings, size_t count, const char *name, size_t name_len) {
@@ -335,13 +509,7 @@ static bool value_decl_keyword_at(const char *src, size_t len, size_t i, size_t 
   return false;
 }
 
-static void
-analyze_import_bindings(const char *src, size_t len, size_t start, import_binding_t *bindings, size_t count) {
-  size_t live = 0;
-  for (size_t b = 0; b < count; b++)
-    live += !bindings[b].later_decl && !bindings[b].value_use;
-  if (live == 0) return;
-
+static void analyze_import_bindings(const char *src, size_t len, size_t start, import_binding_t *bindings, size_t count) {
   for (size_t i = start; i < len;) {
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
       i = skim_skip_string_raw(src, len, i);
@@ -377,21 +545,60 @@ analyze_import_bindings(const char *src, size_t len, size_t start, import_bindin
       continue;
     }
 
+    if (ident_len == 6 && memcmp(src + ident_start, "export", 6) == 0 && statement_keyword_can_start_here(src, ident_start)) {
+      size_t type_pos = skim_skip_ws_comments(src, len, ident_end);
+      if (type_statement_keyword_at(src, len, type_pos)) {
+        size_t end = export_type_statement_end(src, len, type_pos);
+        mark_bindings_in_type_range(src, len, type_pos, end, bindings, count);
+        i = end;
+        continue;
+      }
+    }
+
+    if (
+      ((ident_len == 4 && memcmp(src + ident_start, "type", 4) == 0) ||
+       (ident_len == 9 && memcmp(src + ident_start, "interface", 9) == 0)) &&
+      type_statement_keyword_at(src, len, ident_start)
+    ) {
+      size_t end = export_type_statement_end(src, len, ident_start);
+      mark_bindings_in_type_range(src, len, ident_start, end, bindings, count);
+      i = end;
+      continue;
+    }
+
     size_t keyword_len = 0;
     if (value_decl_keyword_at(src, len, ident_start, &keyword_len)) {
       size_t name_start = 0, name_end = 0;
       skim_parse_identifier(src, len, ident_start + keyword_len, &name_start, &name_end);
-      if (name_start != name_end) mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+      if (name_start != name_end) {
+        mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+        i = name_end;
+        continue;
+      }
     }
 
     import_binding_t *binding = find_import_binding(bindings, count, src + ident_start, ident_len);
-    if (binding && !occurrence_is_type_position(src, ident_start)) binding->value_use = true;
+    if (binding) {
+      if (occurrence_is_type_position(src, len, ident_start)) binding->type_use = true;
+      else binding->value_use = true;
+    }
   }
 }
 
 static bool import_binding_should_keep(const import_binding_t *binding, const char *src, size_t import_pos) {
-  return binding->value_use && !binding->later_decl &&
-         !skim_decl_seen_before(src, binding->local, import_pos, SKIM_DECL_VALUE);
+  if (binding->later_decl || skim_decl_seen_before(src, binding->local, import_pos, SKIM_DECL_VALUE)) return false;
+  if (binding->value_use) return true;
+  if (binding->type_use) return false;
+  return true;
+}
+
+static bool import_local_should_keep(const char *src, size_t len, size_t start, const char *local, size_t import_pos) {
+  import_binding_t binding = {
+    .local = (char *)local,
+    .local_len = strlen(local),
+  };
+  analyze_import_bindings(src, len, start, &binding, 1);
+  return import_binding_should_keep(&binding, src, import_pos);
 }
 
 static bool try_export_named(skim_str_t *out, const char *src, size_t len, size_t i, size_t brace, size_t *out_end) {
@@ -677,7 +884,7 @@ static bool identifier_has_external_value_use(
       memcmp(src + i, name, n) == 0 && (i == 0 || !skim_is_id_part(src[i - 1])) &&
       (i + n == len || !skim_is_id_part(src[i + n]))
     ) {
-      bool type_position = occurrence_is_type_position(src, i);
+      bool type_position = occurrence_is_type_position(src, len, i);
       if (
         !pos_in_import_equals_decl(decls, decl_count, i) && !pos_in_import_equals_statement(src, len, i) &&
         !word_before_is(src, i, "import") && (!type_position || typeof_before_is_type_query(src, i))
@@ -930,9 +1137,7 @@ try_namespace_import_statement(skim_str_t *out, const char *src, size_t len, siz
   size_t end = skim_skip_statement_like(src, len, module_start);
   size_t module_end = module_specifier_end(src, module_start, end);
   char *local = skim_slice_dup(src, name_start, name_end);
-  bool keep = identifier_has_value_use(src, len, end, local) &&
-              !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
-              !has_value_declaration(src + end, len - end, local);
+  bool keep = import_local_should_keep(src, len, end, local, i);
   free(local);
 
   if (keep) {
@@ -1026,9 +1231,7 @@ static bool try_default_import_statement(
   size_t end = skim_skip_statement_like(src, len, module_start);
   size_t module_end = module_specifier_end(src, module_start, end);
   char *local = skim_slice_dup(src, name_start, name_end);
-  bool keep = identifier_has_value_use(src, len, end, local) &&
-              !skim_decl_seen_before(src, local, i, SKIM_DECL_VALUE) &&
-              !has_value_declaration(src + end, len - end, local);
+  bool keep = import_local_should_keep(src, len, end, local, i);
   free(local);
 
   if (keep) {

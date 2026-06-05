@@ -37,6 +37,7 @@ const cases = [
   ['enum_refs.ts', '1 3\n'],
   ['export_named.ts', '42\n'],
   ['generics.ts', '4 ok\n'],
+  ['import_object_property.ts', '84\n'],
   ['mixed_default_import.ts', '50\n'],
   ['mixed_import.ts', '42\n'],
   ['namespace.ts', '7\n'],
@@ -56,6 +57,13 @@ for (const support of fs.readdirSync(path.join(here, 'fixtures')).filter(name =>
   const strip = run(bin, [source]);
   assertOk(strip, 'strip decorated_async.ts');
   assertIncludes(strip.stdout, '@dec\n  async run(', 'decorated_async.ts');
+}
+
+{
+  const source = path.join(here, 'fixtures', 'import_object_property.ts');
+  const strip = run(bin, [source]);
+  assertOk(strip, 'strip import_object_property.ts');
+  assertIncludes(strip.stdout, 'unusedValue', 'import_object_property.ts');
 }
 
 for (const [fixture, expected] of cases) {
