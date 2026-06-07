@@ -1,4 +1,4 @@
-# skim
+# meow meow meow
 
 fast TypeScript -> JavaScript. library and tiny CLI.
 
