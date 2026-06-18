@@ -113,6 +113,39 @@ size_t skim_skip_ws_comments(const char *src, size_t len, size_t i) {
   }
 }
 
+static bool slash_starts_regex(const char *src, size_t start, size_t i) {
+  bool saw_newline = false;
+  while (i > start && (src[i - 1] == ' ' || src[i - 1] == '\t' || src[i - 1] == '\n' || src[i - 1] == '\r')) {
+    if (src[i - 1] == '\n' || src[i - 1] == '\r') saw_newline = true;
+    i--;
+  }
+  if (i == start) return true;
+  if (saw_newline) return true;
+  char c = src[i - 1];
+  if ((c == '-' || c == '+') && i >= 2 && src[i - 2] == c) return false;
+  return c == '(' || c == '[' || c == '{' || c == ',' || c == ';' || c == ':' || c == '=' || c == '!' || c == '?' ||
+         c == '&' || c == '|' || c == '+' || c == '-' || c == '*' || c == '~' || c == '^' || c == '<' || c == '>';
+}
+
+static size_t skip_regex_literal(const char *src, size_t len, size_t i) {
+  bool in_class = false;
+  i++;
+  while (i < len) {
+    char c = src[i++];
+    if (c == '\\' && i < len) {
+      i++;
+      continue;
+    }
+    if (c == '[') in_class = true;
+    else if (c == ']') in_class = false;
+    else if (c == '/' && !in_class) break;
+    else if (c == '\n' || c == '\r') break;
+  }
+  while (i < len && skim_is_id_part(src[i]))
+    i++;
+  return i;
+}
+
 size_t skim_skip_string_raw(const char *src, size_t len, size_t i) {
   char quote = src[i++];
   while (i < len) {
@@ -131,6 +164,7 @@ size_t skim_skip_string_raw(const char *src, size_t len, size_t i) {
 }
 
 size_t skim_skip_balanced(const char *src, size_t len, size_t i, char open, char close) {
+  size_t start = i;
   int depth = 0;
   while (i < len) {
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
@@ -148,6 +182,10 @@ size_t skim_skip_balanced(const char *src, size_t len, size_t i, char open, char
       while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
         i++;
       if (i + 1 < len) i += 2;
+      continue;
+    }
+    if (src[i] == '/' && slash_starts_regex(src, start, i)) {
+      i = skip_regex_literal(src, len, i);
       continue;
     }
     if (src[i] == open) depth++;

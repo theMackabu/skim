@@ -7,6 +7,13 @@ type Count = number;
 const user: User = { name: "ant" };
 let count: Count = 3 as Count;
 const doubled = (count satisfies number) * 2;
+type RegexExecOutput = { value: string };
+export async function regexBoundary(value: string): Promise<RegexExecOutput> {
+  const quote = (arg: string) => arg.replace(/'/g, "\\'");
+  return new Promise<RegexExecOutput>((resolve) => {
+    resolve({ value: quote(value) } as RegexExecOutput);
+  });
+}
 const utilLike = { styleText: (_s: string, text: string) => text };
 const pickedStyleText =
   typeof (utilLike as { styleText?: unknown }).styleText === "function"
