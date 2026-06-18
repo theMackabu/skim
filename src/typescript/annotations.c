@@ -45,6 +45,8 @@ static size_t skip_type_tail_impl(const char *src, size_t len, size_t i, bool st
       (skim_word_at(src, len, i, "of") || skim_word_at(src, len, i, "in"))
     )
       break;
+    if (paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token && skim_word_at(src, len, i, "as"))
+      break;
     if (c == '(') paren++;
     else if (c == ')' && paren-- <= 0) break;
     else if (c == '[') bracket++;
