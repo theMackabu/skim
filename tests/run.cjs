@@ -66,6 +66,28 @@ for (const support of fs.readdirSync(path.join(here, 'fixtures')).filter(name =>
   assertIncludes(strip.stdout, 'unusedValue', 'import_object_property.ts');
 }
 
+{
+  const source = path.join(tmp, 'semicolonless_import_later_line_comment.ts');
+  const js = path.join(tmp, 'semicolonless_import_later_line_comment.mjs');
+  fs.writeFileSync(source, [
+    'import { readFileSync } from "node:fs"',
+    'route(',
+    '  "/api/auth/*",',
+    '  // test "*"',
+    '  readFileSync,',
+    ')',
+    ''
+  ].join('\n'));
+  const strip = run(bin, [source]);
+  assertOk(strip, 'strip semicolonless_import_later_line_comment.ts');
+  const importCount = (strip.stdout.match(/import \{ readFileSync \}/g) || []).length;
+  if (importCount !== 1)
+    throw new Error(`semicolonless_import_later_line_comment.ts emitted ${importCount} imports\n\nGenerated JS:\n${strip.stdout}`);
+  assertIncludes(strip.stdout, '// test "*"\n  readFileSync', 'semicolonless_import_later_line_comment.ts');
+  fs.writeFileSync(js, strip.stdout);
+  assertOk(run(process.execPath, ['--check', js]), 'check semicolonless_import_later_line_comment.ts');
+}
+
 for (const [fixture, expected] of cases) {
   const source = path.join(here, 'fixtures', fixture);
   const js = path.join(tmp, fixture.replace(/\.ts$/, fixture.includes('.cjs.') ? '.cjs' : '.mjs'));

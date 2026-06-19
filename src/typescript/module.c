@@ -7,6 +7,65 @@
 
 static size_t export_type_statement_end(const char *src, size_t len, size_t i);
 
+static size_t import_statement_end(const char *src, size_t len, size_t i) {
+  int paren = 0, bracket = 0, brace = 0;
+  bool next_string_is_module_specifier = false;
+  bool saw_module_specifier = false;
+  while (i < len) {
+    char c = src[i];
+    if (c == '\'' || c == '"' || c == '`') {
+      i = skim_skip_string_raw(src, len, i);
+      if (next_string_is_module_specifier) {
+        saw_module_specifier = true;
+        next_string_is_module_specifier = false;
+      }
+      continue;
+    }
+    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
+      if (paren == 0 && bracket == 0 && brace == 0 && saw_module_specifier) return i;
+      i += 2;
+      while (i < len && src[i] != '\n' && src[i] != '\r')
+        i++;
+      continue;
+    }
+    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
+        i++;
+      if (i + 1 < len) i += 2;
+      continue;
+    }
+    if (paren == 0 && bracket == 0 && brace == 0) {
+      if (skim_word_at(src, len, i, "import")) {
+        size_t next = skim_skip_ws_comments(src, len, i + 6);
+        if (next < len && (src[next] == '\'' || src[next] == '"' || src[next] == '`')) {
+          next_string_is_module_specifier = true;
+        }
+        i += 6;
+        continue;
+      }
+      if (skim_word_at(src, len, i, "from")) {
+        next_string_is_module_specifier = true;
+        i += 4;
+        continue;
+      }
+    }
+    if (c == '(') paren++;
+    else if (c == ')' && paren > 0) paren--;
+    else if (c == '[') bracket++;
+    else if (c == ']' && bracket > 0) bracket--;
+    else if (c == '{') brace++;
+    else if (c == '}' && brace > 0) brace--;
+    else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) return i + 1;
+    else if (
+      (c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && saw_module_specifier
+    )
+      return i;
+    i++;
+  }
+  return i;
+}
+
 static size_t trim_left(const char *src, size_t len, size_t i, size_t end) {
   (void)len;
   while (i < end && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r'))
@@ -442,7 +501,7 @@ static void mark_import_binding_decl(import_binding_t *bindings, size_t count, c
 static size_t
 mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *src, size_t len, size_t i) {
   size_t j = skim_skip_ws_comments(src, len, i + 6);
-  if (skim_word_at(src, len, j, "type")) return skim_skip_statement_like(src, len, i);
+  if (skim_word_at(src, len, j, "type")) return import_statement_end(src, len, i);
 
   if (j < len && src[j] == '{') {
     size_t close = skim_skip_balanced(src, len, j, '{', '}');
@@ -458,7 +517,7 @@ mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *
       }
       item_start = p + 1;
     }
-    return skim_skip_statement_like(src, len, close);
+    return import_statement_end(src, len, i);
   }
 
   if (j < len && src[j] == '*') {
@@ -468,7 +527,7 @@ mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *
       skim_parse_identifier(src, len, as_pos + 2, &name_start, &name_end);
       if (name_start != name_end) mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
     }
-    return skim_skip_statement_like(src, len, j);
+    return import_statement_end(src, len, i);
   }
 
   size_t name_start = 0, name_end = 0;
@@ -492,10 +551,10 @@ mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *
         }
         item_start = p + 1;
       }
-      return skim_skip_statement_like(src, len, close);
+      return import_statement_end(src, len, i);
     }
   }
-  return skim_skip_statement_like(src, len, i);
+  return import_statement_end(src, len, i);
 }
 
 static bool value_decl_keyword_at(const char *src, size_t len, size_t i, size_t *keyword_len) {
@@ -989,7 +1048,7 @@ static bool try_named_import(skim_str_t *out, const char *src, size_t len, size_
   size_t after = skim_skip_ws_comments(src, len, close);
   if (!skim_word_at(src, len, after, "from")) return false;
   size_t module_start = skim_skip_ws_comments(src, len, after + 4);
-  size_t end = skim_skip_statement_like(src, len, module_start);
+  size_t end = import_statement_end(src, len, i);
   size_t module_end = end;
   if (module_end > module_start && src[module_end - 1] == ';') module_end--;
 
@@ -1053,7 +1112,7 @@ static bool try_default_named_import(
   size_t after = skim_skip_ws_comments(src, len, close);
   if (!skim_word_at(src, len, after, "from")) return false;
   size_t module_start = skim_skip_ws_comments(src, len, after + 4);
-  size_t end = skim_skip_statement_like(src, len, module_start);
+  size_t end = import_statement_end(src, len, i);
   size_t module_end = end;
   if (module_end > module_start && src[module_end - 1] == ';') module_end--;
 
@@ -1115,7 +1174,7 @@ static size_t module_specifier_end(const char *src, size_t module_start, size_t 
 
 static bool try_type_import_statement(skim_str_t *out, const char *src, size_t len, size_t i, size_t j, size_t *io) {
   if (!skim_word_at(src, len, j, "type")) return false;
-  size_t end = skim_skip_statement_like(src, len, i);
+  size_t end = import_statement_end(src, len, i);
   skim_emit_preserved_newlines(out, src, i, end);
   *io = end;
   return true;
@@ -1134,7 +1193,7 @@ try_namespace_import_statement(skim_str_t *out, const char *src, size_t len, siz
   if (name_start == name_end || !skim_word_at(src, len, from_pos, "from")) return false;
 
   size_t module_start = skim_skip_ws_comments(src, len, from_pos + 4);
-  size_t end = skim_skip_statement_like(src, len, module_start);
+  size_t end = import_statement_end(src, len, i);
   size_t module_end = module_specifier_end(src, module_start, end);
   char *local = skim_slice_dup(src, name_start, name_end);
   bool keep = import_local_should_keep(src, len, end, local, i);
@@ -1156,7 +1215,7 @@ try_namespace_import_statement(skim_str_t *out, const char *src, size_t len, siz
 static bool try_named_import_statement(skim_str_t *out, const char *src, size_t len, size_t i, size_t j, size_t *io) {
   if (j >= len || src[j] != '{') return false;
   if (!try_named_import(out, src, len, i, j)) return false;
-  *io = skim_skip_statement_like(src, len, j);
+  *io = import_statement_end(src, len, i);
   return true;
 }
 
@@ -1174,7 +1233,7 @@ static bool try_default_named_import_statement(
   size_t brace = skim_skip_ws_comments(src, len, eq + 1);
   if (brace >= len || src[brace] != '{') return false;
   if (!try_default_named_import(out, src, len, i, name_start, name_end, brace)) return false;
-  *io = skim_skip_statement_like(src, len, brace);
+  *io = import_statement_end(src, len, i);
   return true;
 }
 
@@ -1228,7 +1287,7 @@ static bool try_default_import_statement(
   if (name_start == name_end || !skim_word_at(src, len, eq, "from")) return false;
 
   size_t module_start = skim_skip_ws_comments(src, len, eq + 4);
-  size_t end = skim_skip_statement_like(src, len, module_start);
+  size_t end = import_statement_end(src, len, i);
   size_t module_end = module_specifier_end(src, module_start, end);
   char *local = skim_slice_dup(src, name_start, name_end);
   bool keep = import_local_should_keep(src, len, end, local, i);
