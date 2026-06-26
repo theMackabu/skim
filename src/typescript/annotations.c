@@ -937,6 +937,13 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
   static const char *modifiers[] = {"public", "private", "protected", "readonly", "override"};
   for (size_t m = 0; m < sizeof(modifiers) / sizeof(modifiers[0]); m++) {
     if (skim_word_at(src, len, i, modifiers[m])) {
+      size_t after_mod = skim_skip_ws(src, len, i + strlen(modifiers[m]));
+      if (
+        after_mod < len &&
+        (src[after_mod] == ':' || src[after_mod] == ',' || src[after_mod] == '}' ||
+         src[after_mod] == '(' || src[after_mod] == '=')
+      )
+        return false;
       char prev = prev_non_ws_same_line_char(src, i);
       if (
         prev != '(' && prev != ',' && prev != '{' && prev != ';' && prev != '\n' && prev != '\r' &&

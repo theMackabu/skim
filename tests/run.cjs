@@ -43,6 +43,7 @@ const cases = [
   ['namespace.ts', '7\n'],
   ['namespace_exports.ts', '11 hi\n'],
   ['non_null_optional.ts', 'yes 5\n'],
+  ['object_property_modifier.ts', 'a.ts:true false 1 true\n'],
   ['parameter_property.ts', '9\n'],
   ['parameter_property_super.ts', '12\n'],
   ['import_equals.cjs.ts', 'function\n']
