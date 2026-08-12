@@ -3,7 +3,7 @@
 fast TypeScript -> JavaScript. library and tiny CLI.
 
 ```sh
-meson setup build
+meson setup build -Dtests=true
 meson compile -C build
 meson test -C build
 ```

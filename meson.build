@@ -74,12 +74,6 @@ skim_cli = executable('skim',
   install: true,
 )
 
-skim_context_test = executable('skim_context_test',
-  files('tests/context.c'),
-  dependencies: skim_dep,
-  include_directories: private_inc,
-)
-
 install_headers('skim.h')
 
 pkg = import('pkgconfig')
@@ -90,30 +84,38 @@ pkg.generate(libskim,
   version: meson.project_version(),
 )
 
-node = find_program('node', required: false)
-if node.found()
-  test('fixtures', node,
-    args: files('tests/run.cjs'),
-    env: ['SKIM_BIN=' + skim_cli.full_path()],
+if get_option('tests')
+  skim_context_test = executable('skim_context_test',
+    files('tests/context.c'),
+    dependencies: skim_dep,
+    include_directories: private_inc,
+  )
+
+  node = find_program('node', required: false)
+  if node.found()
+    test('fixtures', node,
+      args: files('tests/run.cjs'),
+      env: ['SKIM_BIN=' + skim_cli.full_path()],
+    )
+  endif
+
+  test('context', skim_context_test,
+    args: files(
+      'tests/fixtures/annotations.ts',
+      'tests/fixtures/class_modifiers.ts',
+      'tests/fixtures/enum.ts',
+      'tests/fixtures/enum_refs.ts',
+      'tests/fixtures/decorated_async.ts',
+      'tests/fixtures/export_named.ts',
+      'tests/fixtures/generics.ts',
+      'tests/fixtures/import_equals.cjs.ts',
+      'tests/fixtures/mixed_default_import.ts',
+      'tests/fixtures/mixed_import.ts',
+      'tests/fixtures/namespace.ts',
+      'tests/fixtures/namespace_exports.ts',
+      'tests/fixtures/non_null_optional.ts',
+      'tests/fixtures/parameter_property.ts',
+      'tests/fixtures/parameter_property_super.ts',
+    ),
   )
 endif
-
-test('context', skim_context_test,
-  args: files(
-    'tests/fixtures/annotations.ts',
-    'tests/fixtures/class_modifiers.ts',
-    'tests/fixtures/enum.ts',
-    'tests/fixtures/enum_refs.ts',
-    'tests/fixtures/decorated_async.ts',
-    'tests/fixtures/export_named.ts',
-    'tests/fixtures/generics.ts',
-    'tests/fixtures/import_equals.cjs.ts',
-    'tests/fixtures/mixed_default_import.ts',
-    'tests/fixtures/mixed_import.ts',
-    'tests/fixtures/namespace.ts',
-    'tests/fixtures/namespace_exports.ts',
-    'tests/fixtures/non_null_optional.ts',
-    'tests/fixtures/parameter_property.ts',
-    'tests/fixtures/parameter_property_super.ts',
-  ),
-)
