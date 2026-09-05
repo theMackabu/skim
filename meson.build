@@ -1,5 +1,5 @@
 project('skim', 'c',
-  version: '0.0.11',
+  version: '0.0.12',
   license: 'MIT',
   default_options: [
     'c_std=c23',
@@ -114,6 +114,7 @@ if get_option('tests')
       'tests/fixtures/namespace.ts',
       'tests/fixtures/namespace_exports.ts',
       'tests/fixtures/non_null_optional.ts',
+      'tests/fixtures/regex_literals.ts',
       'tests/fixtures/parameter_property.ts',
       'tests/fixtures/parameter_property_super.ts',
     ),

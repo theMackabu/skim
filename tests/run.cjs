@@ -31,6 +31,7 @@ if (versionResult.stdout !== `skim ${version}\n`)
   throw new Error(`--version mismatch\nexpected: skim ${version}\nactual:   ${versionResult.stdout}`);
 
 const cases = [
+  ['regex_literals.ts', '["1","2"]\n'.repeat(3) + '[" 1+1 "," 3*3 "]\n'.repeat(3)],
   ['annotations.ts', 'ant:6 10,none\n'],
   ['class_modifiers.ts', 'ready 3\n'],
   ['enum.ts', '1 2 blue\n'],
@@ -102,6 +103,76 @@ for (const [fixture, expected] of cases) {
     throw new Error(
       `${fixture} stdout mismatch\nexpected: ${JSON.stringify(expected)}\nactual:   ${JSON.stringify(node.stdout)}\n\nGenerated JS:\n${strip.stdout}`
     );
+}
+
+
+// A slash in an expression must still allow subsequent TypeScript erasure.
+{
+  const source = path.join(tmp, 'regex_division.ts');
+  const js = source.replace(/\.ts$/, '.mjs');
+  fs.writeFileSync(source, `
+    class C {
+      run(value: number) {
+        const a = value / (2 as number) / 2;
+        const b = value /* comment */ / (2 as number);
+        const c = { return: value }.return / (2 as number);
+        return [a, b, c, /a+?/.source];
+      }
+    }
+    console.log(JSON.stringify(new C().run(8)));
+  `);
+  const strip = run(bin, [source]);
+  assertOk(strip, 'strip regex_division.ts');
+  fs.writeFileSync(js, strip.stdout);
+  const result = run(process.execPath, [js]);
+  assertOk(result, 'run regex_division.ts');
+  if (result.stdout !== '[2,4,4,"a+?"]\n') throw new Error(`division changed: ${result.stdout}`);
+}
+
+// Compare literal source and flags, not just syntax: valid output can still
+// silently change a lazy match, capture group, character class, or whitespace.
+{
+  const literals = [
+    String.raw`/\{&([\s\S]*?)&\}/gms`,
+    '/a+?b??c{1,3}?/g',
+    '/(foo)?(?<name>bar)(?:baz)(?=qux)(?!no)/',
+    '/a  b = c; (word)+ (x){2}/',
+    String.raw`/[\/\]{}?!:]/g`,
+    '/}/',
+    '/{/',
+    '/1000000_0 0x10 1.00/',
+    '/public readonly as const!/',
+    '/constructor(foo)/',
+    '/constructor(public x: number) {}/',
+  ];
+  const contexts = [
+    literal => `const r: RegExp = ${literal};`,
+    literal => `const r = /* before literal */ ${literal};`,
+    literal => `function f() { return /* before literal */ ${literal}; } const r = f();`,
+    literal => `class C { constructor(public x: number) {} run() { return ${literal}; } } const r = new C(1).run();`,
+    literal => `function f(): RegExp { return ${literal}; } const r = f();`,
+    literal => `class C { run(): RegExp { const r = ${literal}; return r; } } const r = new C().run();`,
+    literal => `class C { async run() { await Promise.resolve(); return ${literal}; } } const r = await new C().run();`,
+    literal => `class C { r = ${literal}; } const r = new C().r;`,
+    literal => `class C { r: RegExp = ${literal}; } const r = new C().r;`,
+    literal => `class C { run(r: RegExp = ${literal}) { return r; } } const r = new C().run();`,
+  ];
+  for (const [i, literal] of literals.entries()) {
+    const regex = require('vm').runInNewContext(literal);
+    const expected = JSON.stringify([regex.source, regex.flags]) + '\n';
+    for (const [j, context] of contexts.entries()) {
+      const source = path.join(tmp, `regex_${i}_${j}.ts`);
+      const js = source.replace(/\.ts$/, '.mjs');
+      fs.writeFileSync(source, context(literal) + '\nconsole.log(JSON.stringify([r.source, r.flags]));\n');
+      const strip = run(bin, [source]);
+      assertOk(strip, `strip ${source}`);
+      assertIncludes(strip.stdout, literal, source);
+      fs.writeFileSync(js, strip.stdout);
+      const result = run(process.execPath, [js]);
+      assertOk(result, `run ${source}`);
+      if (result.stdout !== expected) throw new Error(`${source}: expected ${expected}, got ${result.stdout}`);
+    }
+  }
 }
 
 console.log('skim fixtures passed');

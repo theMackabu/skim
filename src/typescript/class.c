@@ -1113,8 +1113,12 @@ copy_class_body_common_token(skim_str_t *out, const char *src, size_t len, size_
     *io = skim_copy_block_comment(out, src, len, i);
     return true;
   }
+  if (src[i] == '/' && skim_slash_starts_regex(src, 0, i)) {
+    *io = skim_skip_regex_literal(src, end, i);
+    skim_str_putn(out, src + i, *io - i);
+    return true;
+  }
   if (allow_ts && src[i] != '@' && skim_transform_try_at(out, src, len, io)) return true;
-  (void)end;
   return false;
 }
 
@@ -1536,6 +1540,15 @@ bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io)
   size_t ctor_member_start = 0;
   bool found = false;
   while (ctor < body_close) {
+    size_t next = skim_skip_ws_comments(src, body_close, ctor);
+    if (next != ctor) {
+      ctor = next;
+      continue;
+    }
+    if (src[ctor] == '/' && skim_slash_starts_regex(src, body_open, ctor)) {
+      ctor = skim_skip_regex_literal(src, body_close, ctor);
+      continue;
+    }
     if (src[ctor] == '\'' || src[ctor] == '"' || src[ctor] == '`') {
       ctor = skim_skip_string_raw(src, len, ctor);
       continue;

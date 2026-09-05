@@ -126,6 +126,12 @@ static void cleanup_output_spacing(skim_str_t *out, skim_str_t *scratch) {
       i = cleanup_copy_block_comment(&cleaned, src, len, i);
       continue;
     }
+    if (src[i] == '/' && skim_slash_starts_regex(src, 0, i)) {
+      size_t after = skim_skip_regex_literal(src, len, i);
+      skim_str_putn(&cleaned, src + i, after - i);
+      i = after;
+      continue;
+    }
     if (isspace((unsigned char)src[i])) {
       bool has_newline = false;
       size_t last_newline = i;

@@ -13,39 +13,6 @@ static bool next_non_ws_is_member_access(const char *src, size_t len, size_t i) 
   return i < len && (src[i] == '.' || src[i] == '[' || (i + 1 < len && src[i] == '?' && src[i + 1] == '.'));
 }
 
-static bool slash_starts_regex(const char *src, size_t start, size_t i) {
-  bool saw_newline = false;
-  while (i > start && (src[i - 1] == ' ' || src[i - 1] == '\t' || src[i - 1] == '\n' || src[i - 1] == '\r')) {
-    if (src[i - 1] == '\n' || src[i - 1] == '\r') saw_newline = true;
-    i--;
-  }
-  if (i == start) return true;
-  if (saw_newline) return true;
-  char c = src[i - 1];
-  if ((c == '-' || c == '+') && i >= 2 && src[i - 2] == c) return false;
-  return c == '(' || c == '[' || c == '{' || c == ',' || c == ';' || c == ':' || c == '=' || c == '!' || c == '?' ||
-         c == '&' || c == '|' || c == '+' || c == '-' || c == '*' || c == '~' || c == '^' || c == '<' || c == '>';
-}
-
-static size_t copy_regex_literal(skim_str_t *out, const char *src, size_t len, size_t i) {
-  skim_str_putc(out, src[i++]);
-  bool in_class = false;
-  while (i < len) {
-    char c = src[i++];
-    skim_str_putc(out, c);
-    if (c == '\\' && i < len) {
-      skim_str_putc(out, src[i++]);
-      continue;
-    }
-    if (c == '[') in_class = true;
-    else if (c == ']') in_class = false;
-    else if (c == '/' && !in_class) break;
-  }
-  while (i < len && skim_is_id_part(src[i]))
-    skim_str_putc(out, src[i++]);
-  return i;
-}
-
 static bool word_before_out_is(const skim_str_t *out, size_t pos, const char *word) {
   while (pos > 0 && isspace((unsigned char)out->data[pos - 1]))
     pos--;
@@ -654,8 +621,10 @@ transform_range_impl(const char *src, size_t len, size_t start, size_t end, skim
       i = skim_copy_block_comment(out, src, len, i);
       continue;
     }
-    if (src[i] == '/' && slash_starts_regex(src, start, i)) {
-      i = copy_regex_literal(out, src, len, i);
+    if (src[i] == '/' && skim_slash_starts_regex(src, start, i)) {
+      size_t after = skim_skip_regex_literal(src, end, i);
+      skim_str_putn(out, src + i, after - i);
+      i = after;
       continue;
     }
     if (legacy_octal_literal_at(src, len, i)) {

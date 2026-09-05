@@ -113,21 +113,41 @@ size_t skim_skip_ws_comments(const char *src, size_t len, size_t i) {
   }
 }
 
-static bool slash_starts_regex(const char *src, size_t start, size_t i) {
+bool skim_slash_starts_regex(const char *src, size_t start, size_t i) {
   bool saw_newline = false;
-  while (i > start && (src[i - 1] == ' ' || src[i - 1] == '\t' || src[i - 1] == '\n' || src[i - 1] == '\r')) {
-    if (src[i - 1] == '\n' || src[i - 1] == '\r') saw_newline = true;
-    i--;
+  for (;;) {
+    while (i > start && isspace((unsigned char)src[i - 1])) {
+      if (src[i - 1] == '\n' || src[i - 1] == '\r') saw_newline = true;
+      i--;
+    }
+    if (i < start + 2 || src[i - 2] != '*' || src[i - 1] != '/') break;
+    size_t comment = i - 2;
+    while (comment > start && !(src[comment - 1] == '/' && src[comment] == '*'))
+      comment--;
+    if (comment == start) break;
+    i = comment - 1;
   }
   if (i == start) return true;
   if (saw_newline) return true;
+  size_t word_start = i;
+  while (word_start > start && skim_is_id_part(src[word_start - 1]))
+    word_start--;
+  if (word_start < i && (word_start == start || src[word_start - 1] != '.')) {
+    static const char *words[] = {
+      "return", "throw", "yield", "await", "case", "delete", "void", "typeof", "in", "instanceof"
+    };
+    for (size_t k = 0; k < sizeof(words) / sizeof(words[0]); k++) {
+      size_t n = strlen(words[k]);
+      if (i - word_start == n && memcmp(src + word_start, words[k], n) == 0) return true;
+    }
+  }
   char c = src[i - 1];
   if ((c == '-' || c == '+') && i >= 2 && src[i - 2] == c) return false;
   return c == '(' || c == '[' || c == '{' || c == ',' || c == ';' || c == ':' || c == '=' || c == '!' || c == '?' ||
          c == '&' || c == '|' || c == '+' || c == '-' || c == '*' || c == '~' || c == '^' || c == '<' || c == '>';
 }
 
-static size_t skip_regex_literal(const char *src, size_t len, size_t i) {
+size_t skim_skip_regex_literal(const char *src, size_t len, size_t i) {
   bool in_class = false;
   i++;
   while (i < len) {
@@ -184,8 +204,8 @@ size_t skim_skip_balanced(const char *src, size_t len, size_t i, char open, char
       if (i + 1 < len) i += 2;
       continue;
     }
-    if (src[i] == '/' && slash_starts_regex(src, start, i)) {
-      i = skip_regex_literal(src, len, i);
+    if (src[i] == '/' && skim_slash_starts_regex(src, start, i)) {
+      i = skim_skip_regex_literal(src, len, i);
       continue;
     }
     if (src[i] == open) depth++;

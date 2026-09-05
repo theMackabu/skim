@@ -51,9 +51,11 @@ bool skim_has_type_only_module_syntax(const char *src, size_t len);
 bool skim_is_id_start(char c);
 bool skim_is_id_part(char c);
 bool skim_word_at(const char *src, size_t len, size_t i, const char *word);
+bool skim_slash_starts_regex(const char *src, size_t start, size_t i);
 
 size_t skim_skip_ws(const char *src, size_t len, size_t i);
 size_t skim_skip_ws_comments(const char *src, size_t len, size_t i);
+size_t skim_skip_regex_literal(const char *src, size_t len, size_t i);
 size_t skim_skip_string_raw(const char *src, size_t len, size_t i);
 size_t skim_skip_balanced(const char *src, size_t len, size_t i, char open, char close);
 size_t skim_skip_statement_like(const char *src, size_t len, size_t i);
