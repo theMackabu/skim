@@ -138,6 +138,7 @@ static bool namespace_body_has_ambient_decl(const char *src, size_t len, size_t 
 }
 
 static size_t skip_type_like_decl(const char *src, size_t len, size_t i) {
+  if (skim_word_at(src, len, i, "type")) return skim_skip_type_alias(src, len, i);
   size_t body = i;
   while (body < len && src[body] != ';' && src[body] != '{' && src[body] != '\n' && src[body] != '\r') {
     if (src[body] == '\'' || src[body] == '"' || src[body] == '`') body = skim_skip_string_raw(src, len, body);

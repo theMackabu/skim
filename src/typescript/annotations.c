@@ -1001,10 +1001,11 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
   }
   bool is_type_alias = type_alias_at(src, len, i);
   if (export_declare || is_type_alias || is_declare_keyword) {
-    size_t end = is_type_alias ? skip_type_declaration_statement(src, len, i) : skim_skip_statement_like(src, len, i);
+    size_t end = is_type_alias ? skim_skip_type_alias(src, len, i) : skim_skip_statement_like(src, len, i);
     if (export_declare || is_declare_keyword) {
       size_t after_declare = skim_skip_ws_comments(src, len, i + 7);
-      if (skim_word_at(src, len, after_declare, "function")) end = skip_declare_function_statement(src, len, i);
+      if (skim_word_at(src, len, after_declare, "type")) end = skim_skip_type_alias(src, len, after_declare);
+      else if (skim_word_at(src, len, after_declare, "function")) end = skip_declare_function_statement(src, len, i);
       else if (
         skim_word_at(src, len, after_declare, "var") || skim_word_at(src, len, after_declare, "let") ||
         skim_word_at(src, len, after_declare, "const")

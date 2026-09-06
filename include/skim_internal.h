@@ -58,6 +58,7 @@ size_t skim_skip_ws_comments(const char *src, size_t len, size_t i);
 size_t skim_skip_regex_literal(const char *src, size_t len, size_t i);
 size_t skim_skip_string_raw(const char *src, size_t len, size_t i);
 size_t skim_skip_balanced(const char *src, size_t len, size_t i, char open, char close);
+size_t skim_skip_type_alias(const char *src, size_t len, size_t i);
 size_t skim_skip_statement_like(const char *src, size_t len, size_t i);
 size_t skim_parse_identifier(const char *src, size_t len, size_t i, size_t *start, size_t *end);
 

@@ -1,5 +1,5 @@
 project('skim', 'c',
-  version: '0.0.12',
+  version: '0.0.13',
   license: 'MIT',
   default_options: [
     'c_std=c23',

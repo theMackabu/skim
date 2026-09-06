@@ -118,6 +118,34 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  const char alias_source[] =
+    "type Root = null\n"
+    "// next member\n"
+    "| 'none'\n"
+    "function run() { type Local = number\n/* member */\n| 'local' }\n"
+    "console.log('alive');\n";
+  skim_context_reset(&ctx);
+  out = skim_strip_typescript_borrowed(
+    &ctx, alias_source, strlen(alias_source), "aliases.ts", SKIM_SOURCE_SCRIPT, NULL,
+    &out_len, &error, error_buf, sizeof(error_buf)
+  );
+  assert_strip_ok("aliases.ts", out, out_len, error, error_buf);
+  if (strstr(out, "none") || strstr(out, "local") || !strstr(out, "console.log('alive')") || !strchr(out, '}')) {
+    fprintf(stderr, "aliases.ts: incorrect alias erasure: %s\n", out);
+    return 1;
+  }
+  size_t owned_len = 0;
+  char *owned = skim_strip_typescript_owned(
+    alias_source, strlen(alias_source), "aliases.ts", SKIM_SOURCE_SCRIPT, NULL,
+    &owned_len, &error, error_buf, sizeof(error_buf)
+  );
+  assert_strip_ok("aliases.ts owned", owned, owned_len, error, error_buf);
+  if (owned_len != out_len || memcmp(owned, out, out_len) != 0) {
+    fprintf(stderr, "aliases.ts: owned and borrowed output differ\n");
+    return 1;
+  }
+  skim_free(owned);
+
   skim_context_deinit(&ctx);
   puts("skim context reuse passed");
   return 0;

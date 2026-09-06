@@ -339,61 +339,6 @@ static bool item_is_variable_decl(const char *src, size_t len, size_t i) {
   return skim_word_at(src, len, i, "var") || skim_word_at(src, len, i, "let") || skim_word_at(src, len, i, "const");
 }
 
-static size_t type_alias_item_end(const char *src, size_t len, size_t i) {
-  int paren = 0, bracket = 0, brace = 0, angle = 0;
-  bool seen_type_token = false;
-  char last_sig = '\0';
-  while (i < len) {
-    char c = src[i];
-    if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token) {
-      size_t next = skim_skip_ws(src, len, i + 1);
-      if (
-        last_sig == '=' || last_sig == '|' || last_sig == '&' || last_sig == '?' || last_sig == ':' || last_sig == ','
-      ) {
-        i++;
-        continue;
-      }
-      if (next < len && (src[next] == '|' || src[next] == '&' || src[next] == '?' || src[next] == ':')) {
-        i = next;
-        continue;
-      }
-      return i;
-    }
-    if (c == '\'' || c == '"' || c == '`') {
-      seen_type_token = true;
-      i = skim_skip_string_raw(src, len, i);
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
-    if (c == '(') paren++;
-    else if (c == ')' && paren > 0) paren--;
-    else if (c == '[') bracket++;
-    else if (c == ']' && bracket > 0) bracket--;
-    else if (c == '{') brace++;
-    else if (c == '}' && brace > 0) brace--;
-    else if (c == '<') angle++;
-    else if (c == '>' && angle > 0) angle--;
-    else if (c == ';' && paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i + 1;
-    if (!isspace((unsigned char)c)) {
-      seen_type_token = true;
-      last_sig = c;
-    }
-    i++;
-  }
-  return i;
-}
-
 static size_t text_item_end(const char *src, size_t len, size_t i) {
   bool starts_decorator = i < len && src[i] == '@';
   bool starts_export = skim_word_at(src, len, i, "export");
@@ -510,9 +455,17 @@ bool skim_syntax_item_needs_statement_semicolon(
 }
 
 static size_t item_end_for_kind(const char *src, size_t len, size_t content_start, skim_ast_item_kind_t kind) {
+  size_t type = content_start;
+  if (skim_word_at(src, len, type, "export")) type = skim_skip_ws_comments(src, len, type + 6);
+  if (skim_word_at(src, len, type, "declare")) type = skim_skip_ws_comments(src, len, type + 7);
+  if (skim_word_at(src, len, type, "type")) {
+    size_t name = skim_skip_ws_comments(src, len, type + 4);
+    if (name < len && skim_is_id_start(src[name]) && !range_has_newline(src, type + 4, name))
+      return skim_skip_type_alias(src, len, type);
+  }
   if (item_is_variable_decl(src, len, content_start)) return variable_item_end(src, len, content_start);
   if (item_has_own_braced_body(src, len, content_start)) return braced_item_end(src, len, content_start);
-  if (kind == SKIM_AST_ITEM_TYPE_ALIAS) return type_alias_item_end(src, len, content_start);
+  if (kind == SKIM_AST_ITEM_TYPE_ALIAS) return skim_skip_type_alias(src, len, content_start);
   if (kind == SKIM_AST_ITEM_DECLARE) return skim_skip_statement_like(src, len, content_start);
   return text_item_end(src, len, content_start);
 }

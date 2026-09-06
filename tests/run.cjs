@@ -90,6 +90,95 @@ for (const support of fs.readdirSync(path.join(here, 'fixtures')).filter(name =>
   assertOk(run(process.execPath, ['--check', js]), 'check semicolonless_import_later_line_comment.ts');
 }
 
+// Comments between type members must not terminate a semicolonless alias.
+for (const prefix of ['', 'export ']) {
+  for (const newline of ['\n', '\r\n']) {
+    const source = path.join(tmp, 'commented_type_alias.ts');
+    const js = source.replace(/\.ts$/, '.mjs');
+    fs.writeFileSync(source, [
+      `${prefix}type Root =`,
+      '  // Unknown root',
+      '  | null',
+      '',
+      '  // Explicitly no root specified via `source(none)`',
+      "  | 'none'",
+      '',
+      '  // Specified via `source(…)`, relative to the `base`',
+      '  | { base: string; pattern: string }',
+      `${prefix}type Combined = { a: string }`,
+      '  /* first comment */ // second comment',
+      '  & { b: number }',
+      `${prefix}type Conditional<T> = T extends string`,
+      '  /* true branch */',
+      '  ? number',
+      '  // false branch',
+      '  : boolean',
+      '// Keep the following runtime statement.',
+      'console.log("ok");',
+      ''
+    ].join(newline));
+    const label = `commented aliases (${prefix || 'local'}, ${JSON.stringify(newline)})`;
+    const strip = run(bin, [source]);
+    assertOk(strip, `strip ${label}`);
+    fs.writeFileSync(js, strip.stdout);
+    const result = run(process.execPath, [js]);
+    assertOk(result, `run ${label}`);
+    if (result.stdout !== 'ok\n') throw new Error(`${label}: runtime statement lost`);
+  }
+}
+
+// Exercise each erasure path and ensure an alias never consumes runtime code.
+for (const [name, alias] of [
+  ['literal', "type T = 'none'"],
+  ['template', 'type T = `none`'],
+  ['union', "type T = null\n// member\n| 'none'"],
+  ['intersection', 'type T = { a: string }\n/* member */\n& { b: number }'],
+  ['block_boundary', 'type T = number /* newline\n*/'],
+  ['conditional', "type T = string extends number\n/* branch */ ? 'yes'\n// branch\n: 'no'"],
+  ['generic_arrow', 'type T<U = () => string\n> = { value: U }'],
+]) {
+  for (const [scope, wrap] of [
+    ['local', body => body],
+    ['export', body => 'export ' + body],
+    ['declare', body => 'declare ' + body],
+    ['function', body => 'function run() {\n' + body + '\n}\nrun();'],
+    ['namespace', body => 'namespace N {\n' + body + '\n}'],
+  ]) {
+    const source = path.join(tmp, `${scope}_${name}.ts`);
+    const js = source.replace(/\.ts$/, '.mjs');
+    fs.writeFileSync(source, wrap(alias + (name === 'block_boundary' ? ' ' : '\n') + '{ console.log("alive"); }\n'));
+    const strip = run(bin, [source]);
+    assertOk(strip, `strip ${source}`);
+    fs.writeFileSync(js, strip.stdout);
+    const result = run(process.execPath, [js]);
+    assertOk(result, `run ${source}`);
+    if (result.stdout !== 'alive\n') throw new Error(`${source}: lost runtime block\n${strip.stdout}`);
+  }
+}
+
+// Import-use analysis must agree with erasure about where the alias ends.
+{
+  const source = path.join(tmp, 'alias_import_usage.ts');
+  const js = source.replace(/\.ts$/, '.mjs');
+  fs.writeFileSync(source, [
+    'import { Missing } from "./does-not-exist.mjs";',
+    'import { basename } from "node:path";',
+    'type T = null',
+    '// type-only reference',
+    '| Missing',
+    "type Literal = 'none'",
+    'console.log(basename("/tmp/alive"));',
+    ''
+  ].join('\n'));
+  const strip = run(bin, [source]);
+  assertOk(strip, 'strip alias import usage');
+  if (strip.stdout.includes('does-not-exist')) throw new Error(`type-only import retained\n${strip.stdout}`);
+  fs.writeFileSync(js, strip.stdout);
+  const result = run(process.execPath, [js]);
+  assertOk(result, 'run alias import usage');
+  if (result.stdout !== 'alive\n') throw new Error('runtime import use lost');
+}
+
 for (const [fixture, expected] of cases) {
   const source = path.join(here, 'fixtures', fixture);
   const js = path.join(tmp, fixture.replace(/\.ts$/, fixture.includes('.cjs.') ? '.cjs' : '.mjs'));

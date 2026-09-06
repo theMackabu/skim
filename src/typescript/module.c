@@ -780,13 +780,19 @@ static bool export_default_function_overload_end(const char *src, size_t len, si
 }
 
 static size_t export_type_statement_end(const char *src, size_t len, size_t i) {
+  size_t type = i;
+  if (skim_word_at(src, len, type, "export")) type = skim_skip_ws_comments(src, len, type + 6);
+  if (skim_word_at(src, len, type, "type")) {
+    size_t name = skim_skip_ws_comments(src, len, type + 4);
+    if (name < len && skim_is_id_start(src[name])) return skim_skip_type_alias(src, len, type);
+  }
   int paren = 0, bracket = 0, brace = 0, angle = 0;
   bool seen_token = false;
   char last_sig = '\0';
   while (i < len) {
     char c = src[i];
     if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_token) {
-      size_t next = skim_skip_ws(src, len, i + 1);
+      size_t next = skim_skip_ws_comments(src, len, i + 1);
       if (
         last_sig == '=' || last_sig == '|' || last_sig == '&' || last_sig == '?' || last_sig == ':' || last_sig == ','
       ) {

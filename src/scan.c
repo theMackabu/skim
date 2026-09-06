@@ -113,6 +113,61 @@ size_t skim_skip_ws_comments(const char *src, size_t len, size_t i) {
   }
 }
 
+size_t skim_skip_type_alias(const char *src, size_t len, size_t i) {
+  int paren = 0, bracket = 0, brace = 0, angle = 0;
+  bool seen_type_token = false;
+  char last_sig = '\0';
+  while (i < len) {
+    char c = src[i];
+    if (isspace((unsigned char)c) || (c == '/' && i + 1 < len && (src[i + 1] == '/' || src[i + 1] == '*'))) {
+      size_t next = skim_skip_ws_comments(src, len, i);
+      bool newline = false;
+      for (size_t p = i; p < next; p++) {
+        if (src[p] == '\n' || src[p] == '\r') newline = true;
+      }
+      if (newline && paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token) {
+        bool needs_type = last_sig == '=' || last_sig == '|' || last_sig == '&' || last_sig == '?' || last_sig == ':' || last_sig == ',';
+        bool continues = next < len && (src[next] == '|' || src[next] == '&' || src[next] == '?' || src[next] == ':');
+        if (!needs_type && !continues) return i;
+      }
+      if (next > i) {
+        i = next;
+        continue;
+      }
+    }
+    if (c == '\'' || c == '"' || c == '`') {
+      seen_type_token = true;
+      last_sig = c;
+      i = skim_skip_string_raw(src, len, i);
+      continue;
+    }
+    if (c == '(') paren++;
+    else if (c == ')') {
+      if (paren == 0) return i;
+      paren--;
+    }
+    else if (c == '[') bracket++;
+    else if (c == ']') {
+      if (bracket == 0) return i;
+      bracket--;
+    }
+    else if (c == '{') brace++;
+    else if (c == '}') {
+      if (brace == 0) return i;
+      brace--;
+    }
+    else if (c == '<') angle++;
+    else if (c == '>' && angle > 0 && (i == 0 || src[i - 1] != '=')) angle--;
+    else if (c == ';' && paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i + 1;
+    if (!isspace((unsigned char)c)) {
+      seen_type_token = true;
+      last_sig = c;
+    }
+    i++;
+  }
+  return i;
+}
+
 bool skim_slash_starts_regex(const char *src, size_t start, size_t i) {
   bool saw_newline = false;
   for (;;) {
