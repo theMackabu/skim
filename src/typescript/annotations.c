@@ -1,5 +1,6 @@
 #include "chars.h"
 #include "emit.h"
+#include "run.h"
 #include "skip.h"
 #include "str.h"
 #include "transform.h"
@@ -129,7 +130,8 @@ static bool angle_is_probably_type_assertion(const char *src, size_t len, size_t
 }
 
 static bool try_remove_uninitialized_class_field(const char *src, size_t len, size_t i, size_t *end_out) {
-  if (!skim_options.remove_class_fields_without_initializer && !skim_options.allow_declare_fields_false) return false;
+  const skim_options_t *options = &skim_run->options;
+  if (!options->remove_class_fields_without_initializer && !options->allow_declare_fields_false) return false;
   if (i > 0 && src[i - 1] == '#') return false;
   size_t prev = i;
   while (prev > 0 && (src[prev - 1] == ' ' || src[prev - 1] == '\t'))
@@ -230,7 +232,8 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
   }
 
   if (
-    (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) && src[i] == '@'
+    (skim_run->options.remove_class_fields_without_initializer || skim_run->options.allow_declare_fields_false) &&
+    src[i] == '@'
   ) {
     size_t end = i;
     while (end < len && src[end] != '\n' && src[end] != '\r')

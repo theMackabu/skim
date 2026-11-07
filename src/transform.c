@@ -1,5 +1,6 @@
 #include "ast.h"
 #include "decl.h"
+#include "run.h"
 #include "scan_cache.h"
 #include "skim.h"
 #include "skip.h"
@@ -9,21 +10,18 @@
 
 #include <stdlib.h>
 
-skim_options_t skim_options;
-skim_transform_state_t *skim_state;
-
-static size_t transform_depth;
-skim_source_mode_t skim_source_mode = SKIM_SOURCE_MODULE;
+thread_local skim_run_t *skim_run;
 
 static bool source_mode_needs_module_marker(void) {
-  return skim_source_mode == SKIM_SOURCE_MODULE;
+  return skim_run->source_mode == SKIM_SOURCE_MODULE;
 }
 
-void skim_transform_state_free(skim_transform_state_t *state) {
-  if (!state) return;
-  free(state->decl_buckets);
-  free(state->known_member_buckets);
-  *state = (skim_transform_state_t){0};
+void skim_run_free(skim_run_t *run) {
+  if (!run) return;
+  free(run->decls.decl_buckets);
+  free(run->ts.enums.known_member_buckets);
+  run->decls.decl_buckets = NULL;
+  run->ts.enums.known_member_buckets = NULL;
 }
 
 static void invalidate_position_caches(void) {
@@ -34,7 +32,7 @@ static void invalidate_position_caches(void) {
 }
 
 void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out, skim_str_t *scratch) {
-  bool root_transform = transform_depth++ == 0;
+  bool root_transform = skim_run->transform_depth++ == 0;
   skim_scan_cache_t saved_cache;
   skim_scan_cache_enter(&saved_cache, src, len);
   invalidate_position_caches();
@@ -64,7 +62,7 @@ void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out
   if (root_transform) skim_cleanup_output_spacing(out, scratch);
   skim_scan_cache_leave(&saved_cache);
   invalidate_position_caches();
-  transform_depth--;
+  skim_run->transform_depth--;
   if (root_transform) {
     skim_ts_enum_reset();
     skim_ts_namespace_reset();

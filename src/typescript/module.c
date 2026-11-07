@@ -2,6 +2,7 @@
 #include "decl.h"
 #include "emit.h"
 #include "module_internal.h"
+#include "run.h"
 #include "skip.h"
 #include "str.h"
 #include "transform.h"
@@ -611,8 +612,8 @@ static bool try_import_equals_statement(
     rhs_end--;
 
   char *local = skim_slice_dup(src, name_start, name_end);
-  bool used =
-    strcmp(local, "await") != 0 && (skim_options.only_remove_type_imports || import_equals_is_live(src, len, local));
+  bool used = strcmp(local, "await") != 0 &&
+              (skim_run->options.only_remove_type_imports || import_equals_is_live(src, len, local));
   free(local);
 
   if (used) {

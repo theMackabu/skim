@@ -1,6 +1,7 @@
 #include "chars.h"
 #include "decl.h"
 #include "module_internal.h"
+#include "run.h"
 #include "scan_cache.h"
 #include "skip.h"
 #include "str.h"
@@ -227,55 +228,32 @@ typedef enum {
   IMPORT_POSITION_VALUE,
 } import_position_t;
 
-typedef struct {
-  uint32_t scan_pos;
-  uint32_t prev_plus_one;
-  uint8_t kind;
-  uint8_t position;
-} import_use_t;
-
-typedef struct {
-  uint32_t name;
-  uint32_t name_len;
-  uint32_t last_use_plus_one;
-} import_ident_t;
-
-static struct {
-  const char *src;
-  size_t len;
-  size_t path_start;
-  uint64_t *on_path;
-  import_ident_t *idents;
-  size_t ident_count;
-  size_t ident_mask;
-  import_use_t *uses;
-  size_t use_count;
-  size_t use_cap;
-} import_index;
-
 void skim_ts_module_index_invalidate(void) {
-  free(import_index.on_path);
-  free(import_index.idents);
-  free(import_index.uses);
-  memset(&import_index, 0, sizeof(import_index));
+  skim_import_index_t *idx = &skim_run->ts.import_index;
+  free(idx->on_path);
+  free(idx->idents);
+  free(idx->uses);
+  memset(idx, 0, sizeof((*idx)));
 }
 
 static import_ident_t *import_index_slot(const char *src, const char *name, size_t name_len) {
-  size_t slot = binding_name_hash(name, name_len) & import_index.ident_mask;
+  skim_import_index_t *idx = &skim_run->ts.import_index;
+  size_t slot = binding_name_hash(name, name_len) & idx->ident_mask;
   for (;;) {
-    import_ident_t *ident = &import_index.idents[slot];
+    import_ident_t *ident = &idx->idents[slot];
     if (ident->name_len == 0) return ident;
     if (ident->name_len == name_len && memcmp(src + ident->name, name, name_len) == 0) return ident;
-    slot = (slot + 1) & import_index.ident_mask;
+    slot = (slot + 1) & idx->ident_mask;
   }
 }
 
 static void import_index_grow_idents(const char *src) {
-  import_ident_t *old = import_index.idents;
-  size_t old_cap = import_index.ident_mask + 1;
-  import_index.idents = calloc(old_cap * 2, sizeof(*old));
-  if (!import_index.idents) skim_die("out of memory");
-  import_index.ident_mask = old_cap * 2 - 1;
+  skim_import_index_t *idx = &skim_run->ts.import_index;
+  import_ident_t *old = idx->idents;
+  size_t old_cap = idx->ident_mask + 1;
+  idx->idents = calloc(old_cap * 2, sizeof(*old));
+  if (!idx->idents) skim_die("out of memory");
+  idx->ident_mask = old_cap * 2 - 1;
   for (size_t i = 0; i < old_cap; i++) {
     if (old[i].name_len) *import_index_slot(src, src + old[i].name, old[i].name_len) = old[i];
   }
@@ -284,27 +262,28 @@ static void import_index_grow_idents(const char *src) {
 
 static void
 import_index_record(const char *src, import_use_kind_t kind, size_t scan_pos, size_t name_start, size_t name_len) {
+  skim_import_index_t *idx = &skim_run->ts.import_index;
   if (name_len == 0) return;
-  if ((import_index.ident_count + 1) * 4 > (import_index.ident_mask + 1) * 3) import_index_grow_idents(src);
+  if ((idx->ident_count + 1) * 4 > (idx->ident_mask + 1) * 3) import_index_grow_idents(src);
   import_ident_t *ident = import_index_slot(src, src + name_start, name_len);
   if (ident->name_len == 0) {
     ident->name = (uint32_t)name_start;
     ident->name_len = (uint32_t)name_len;
-    import_index.ident_count++;
+    idx->ident_count++;
   }
-  if (import_index.use_count == import_index.use_cap) {
-    size_t cap = import_index.use_cap ? import_index.use_cap * 2 : 1024;
-    import_use_t *next = realloc(import_index.uses, sizeof(*next) * cap);
+  if (idx->use_count == idx->use_cap) {
+    size_t cap = idx->use_cap ? idx->use_cap * 2 : 1024;
+    import_use_t *next = realloc(idx->uses, sizeof(*next) * cap);
     if (!next) skim_die("out of memory");
-    import_index.uses = next;
-    import_index.use_cap = cap;
+    idx->uses = next;
+    idx->use_cap = cap;
   }
-  import_index.uses[import_index.use_count++] = (import_use_t){
+  idx->uses[idx->use_count++] = (import_use_t){
     .scan_pos = (uint32_t)scan_pos,
     .prev_plus_one = ident->last_use_plus_one,
     .kind = (uint8_t)kind,
   };
-  ident->last_use_plus_one = (uint32_t)import_index.use_count;
+  ident->last_use_plus_one = (uint32_t)idx->use_count;
 }
 
 typedef struct {
@@ -446,13 +425,15 @@ static bool value_decl_keyword_at(const char *src, size_t len, size_t i, size_t 
 }
 
 static inline bool import_index_on_path(size_t pos) {
-  return pos >= import_index.path_start && (import_index.on_path[pos / 64] >> (pos % 64)) & 1;
+  skim_import_index_t *idx = &skim_run->ts.import_index;
+  return pos >= idx->path_start && (idx->on_path[pos / 64] >> (pos % 64)) & 1;
 }
 
 static size_t scan_import_uses(const import_scan_t *scan, const char *src, size_t len, size_t start) {
+  skim_import_index_t *idx = &skim_run->ts.import_index;
   for (size_t i = start; i < len;) {
     if (scan->stop_on_recorded_path && import_index_on_path(i)) return i;
-    if (scan->record) import_index.on_path[i / 64] |= 1ull << (i % 64);
+    if (scan->record) idx->on_path[i / 64] |= 1ull << (i % 64);
     else if (!scan->stop_on_recorded_path && !skim_char_has(src[i], SKIM_CC_ID_START | SKIM_CC_MARKER)) {
       i++;
       continue;
@@ -520,23 +501,25 @@ static size_t scan_import_uses(const import_scan_t *scan, const char *src, size_
 }
 
 static void import_index_build(const char *src, size_t len, size_t start) {
+  skim_import_index_t *idx = &skim_run->ts.import_index;
   enum { INITIAL_IDENT_SLOTS = 1024 };
-  import_index.path_start = start;
-  import_index.on_path = calloc(len / 64 + 1, sizeof(*import_index.on_path));
-  import_index.idents = calloc(INITIAL_IDENT_SLOTS, sizeof(*import_index.idents));
-  if (!import_index.on_path || !import_index.idents) skim_die("out of memory");
-  import_index.ident_mask = INITIAL_IDENT_SLOTS - 1;
+  idx->path_start = start;
+  idx->on_path = calloc(len / 64 + 1, sizeof(*idx->on_path));
+  idx->idents = calloc(INITIAL_IDENT_SLOTS, sizeof(*idx->idents));
+  if (!idx->on_path || !idx->idents) skim_die("out of memory");
+  idx->ident_mask = INITIAL_IDENT_SLOTS - 1;
   import_scan_t scan = {.record = true};
   scan_import_uses(&scan, src, len, start);
 }
 
 static void apply_recorded_import_uses(const import_binding_set_t *set, const char *src, size_t len, size_t join_pos) {
+  skim_import_index_t *idx = &skim_run->ts.import_index;
   for (size_t b = 0; b < set->count; b++) {
     import_binding_t *binding = &set->items[b];
     if (find_import_binding(set, binding->local, binding->local_len) != binding) continue;
     const import_ident_t *ident = import_index_slot(src, binding->local, binding->local_len);
     for (uint32_t use_id = ident->last_use_plus_one; use_id;) {
-      import_use_t *use = &import_index.uses[use_id - 1];
+      import_use_t *use = &idx->uses[use_id - 1];
       if (use->scan_pos < join_pos) break;
       if (use->kind == IMPORT_USE_DECL) binding->later_decl = true;
       else if (use->kind == IMPORT_USE_TYPE) binding->type_use = true;
@@ -560,22 +543,23 @@ void skim_module_analyze_import_bindings(
   import_binding_t *bindings,
   size_t count
 ) {
+  skim_import_index_t *idx = &skim_run->ts.import_index;
   import_binding_set_t binding_set = binding_set_init(bindings, count);
   import_scan_t scan = {.set = &binding_set};
   bool indexable = skim_scan_cache_owns(src) && len <= UINT32_MAX;
   if (!indexable) {
     scan_import_uses(&scan, src, len, start);
   } else {
-    bool first_query = import_index.src != src || import_index.len != len;
+    bool first_query = idx->src != src || idx->len != len;
     if (first_query) {
       skim_ts_module_index_invalidate();
-      import_index.src = src;
-      import_index.len = len;
+      idx->src = src;
+      idx->len = len;
     }
     if (first_query && !skim_word_at(src, len, skim_skip_ws_comments(src, len, start), "import")) {
       scan_import_uses(&scan, src, len, start);
     } else {
-      if (!import_index.on_path) import_index_build(src, len, start);
+      if (!idx->on_path) import_index_build(src, len, start);
       scan.stop_on_recorded_path = true;
       size_t join_pos = scan_import_uses(&scan, src, len, start);
       if (join_pos < len) apply_recorded_import_uses(&binding_set, src, len, join_pos);

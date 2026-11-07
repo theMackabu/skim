@@ -121,24 +121,33 @@ if get_option('tests')
     )
   endif
 
-  test('context', skim_context_test,
-    args: files(
-      'tests/fixtures/annotations.ts',
-      'tests/fixtures/class_modifiers.ts',
-      'tests/fixtures/enum.ts',
-      'tests/fixtures/enum_refs.ts',
-      'tests/fixtures/decorated_async.ts',
-      'tests/fixtures/export_named.ts',
-      'tests/fixtures/generics.ts',
-      'tests/fixtures/import_equals.cjs.ts',
-      'tests/fixtures/mixed_default_import.ts',
-      'tests/fixtures/mixed_import.ts',
-      'tests/fixtures/namespace.ts',
-      'tests/fixtures/namespace_exports.ts',
-      'tests/fixtures/non_null_optional.ts',
-      'tests/fixtures/regex_literals.ts',
-      'tests/fixtures/parameter_property.ts',
-      'tests/fixtures/parameter_property_super.ts',
-    ),
+  test_fixtures = files(
+    'tests/fixtures/annotations.ts',
+    'tests/fixtures/class_modifiers.ts',
+    'tests/fixtures/enum.ts',
+    'tests/fixtures/enum_refs.ts',
+    'tests/fixtures/decorated_async.ts',
+    'tests/fixtures/export_named.ts',
+    'tests/fixtures/generics.ts',
+    'tests/fixtures/import_equals.cjs.ts',
+    'tests/fixtures/mixed_default_import.ts',
+    'tests/fixtures/mixed_import.ts',
+    'tests/fixtures/namespace.ts',
+    'tests/fixtures/namespace_exports.ts',
+    'tests/fixtures/non_null_optional.ts',
+    'tests/fixtures/regex_literals.ts',
+    'tests/fixtures/parameter_property.ts',
+    'tests/fixtures/parameter_property_super.ts',
   )
+
+  test('context', skim_context_test, args: test_fixtures)
+
+  threads_dep = dependency('threads', required: false)
+  if threads_dep.found() and host_machine.system() != 'windows'
+    skim_threads_test = executable('skim_threads_test',
+      files('tests/threads.c'),
+      dependencies: [skim_dep, threads_dep],
+    )
+    test('threads', skim_threads_test, args: test_fixtures)
+  endif
 endif

@@ -1,6 +1,7 @@
 #include "chars.h"
 #include "decl.h"
 #include "emit.h"
+#include "run.h"
 #include "scan_cache.h"
 #include "skip.h"
 #include "str.h"
@@ -11,30 +12,31 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char **used_namespace_params;
-static size_t used_namespace_param_count;
-
 void skim_ts_namespace_reset(void) {
-  for (size_t i = 0; i < used_namespace_param_count; i++) {
-    free(used_namespace_params[i]);
+  skim_namespace_state_t *namespaces = &skim_run->ts.namespaces;
+  for (size_t i = 0; i < namespaces->used_namespace_param_count; i++) {
+    free(namespaces->used_namespace_params[i]);
   }
-  free(used_namespace_params);
-  used_namespace_params = NULL;
-  used_namespace_param_count = 0;
+  free(namespaces->used_namespace_params);
+  namespaces->used_namespace_params = NULL;
+  namespaces->used_namespace_param_count = 0;
 }
 
 static bool namespace_param_used(const char *name) {
-  for (size_t i = 0; i < used_namespace_param_count; i++) {
-    if (strcmp(used_namespace_params[i], name) == 0) return true;
+  skim_namespace_state_t *namespaces = &skim_run->ts.namespaces;
+  for (size_t i = 0; i < namespaces->used_namespace_param_count; i++) {
+    if (strcmp(namespaces->used_namespace_params[i], name) == 0) return true;
   }
   return false;
 }
 
 static void remember_namespace_param(const char *name) {
-  char **next = realloc(used_namespace_params, sizeof(*used_namespace_params) * (used_namespace_param_count + 1));
+  skim_namespace_state_t *namespaces = &skim_run->ts.namespaces;
+  size_t count = namespaces->used_namespace_param_count + 1;
+  char **next = realloc(namespaces->used_namespace_params, sizeof(*namespaces->used_namespace_params) * count);
   if (!next) skim_die("out of memory");
-  used_namespace_params = next;
-  used_namespace_params[used_namespace_param_count++] = skim_slice_dup(name, 0, strlen(name));
+  namespaces->used_namespace_params = next;
+  namespaces->used_namespace_params[namespaces->used_namespace_param_count++] = skim_slice_dup(name, 0, strlen(name));
 }
 
 static char *make_namespace_param(const char *name) {

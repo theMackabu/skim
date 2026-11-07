@@ -2,6 +2,7 @@
 #include "decl.h"
 #include "emit.h"
 #include "enum_internal.h"
+#include "run.h"
 #include "scan_cache.h"
 #include "skip.h"
 #include "str.h"
@@ -12,30 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
-  char *enum_name;
-  char *member_name;
-  size_t enum_name_len;
-  size_t member_name_len;
-  enum_value_t value;
-  bool inline_ref;
-  size_t scope_start;
-  size_t hash_bucket;
-  size_t next_hash;
-} enum_known_member_t;
-
-static enum_known_member_t *known_members;
-static size_t known_member_count;
-static size_t known_member_cap;
-static int enum_expression_depth;
-static bool current_enum_inline_refs;
-static size_t current_enum_scope_start;
-static int enum_suppress_depth;
-
-size_t skim_ts_enum_inline_member_count;
-
 static size_t *known_member_buckets(void) {
-  return skim_state->known_member_buckets;
+  skim_enum_state_t *es = &skim_run->ts.enums;
+  return es->known_member_buckets;
 }
 
 static size_t enum_member_hash(const char *enum_name, size_t enum_len, const char *member_name, size_t member_len) {
@@ -54,61 +34,65 @@ static size_t enum_member_hash(const char *enum_name, size_t enum_len, const cha
 }
 
 void skim_ts_enum_reset(void) {
-  if (!skim_state->known_member_buckets) {
-    skim_state->known_member_buckets = malloc(sizeof(*skim_state->known_member_buckets) * SKIM_BUCKET_COUNT);
-    if (!skim_state->known_member_buckets) skim_die("out of memory");
-    memset(skim_state->known_member_buckets, 0xff, sizeof(*skim_state->known_member_buckets) * SKIM_BUCKET_COUNT);
+  skim_enum_state_t *es = &skim_run->ts.enums;
+  if (!es->known_member_buckets) {
+    es->known_member_buckets = malloc(sizeof(*es->known_member_buckets) * SKIM_BUCKET_COUNT);
+    if (!es->known_member_buckets) skim_die("out of memory");
+    memset(es->known_member_buckets, 0xff, sizeof(*es->known_member_buckets) * SKIM_BUCKET_COUNT);
   }
-  for (size_t i = 0; i < known_member_count; i++) {
-    skim_state->known_member_buckets[known_members[i].hash_bucket] = (size_t)-1;
-    free(known_members[i].enum_name);
-    free(known_members[i].member_name);
-    skim_enum_value_free(known_members[i].value);
+  for (size_t i = 0; i < es->known_member_count; i++) {
+    es->known_member_buckets[es->known_members[i].hash_bucket] = (size_t)-1;
+    free(es->known_members[i].enum_name);
+    free(es->known_members[i].member_name);
+    skim_enum_value_free(es->known_members[i].value);
   }
-  free(known_members);
-  known_members = NULL;
-  known_member_count = 0;
-  known_member_cap = 0;
-  skim_ts_enum_inline_member_count = 0;
-  enum_expression_depth = 0;
-  current_enum_inline_refs = false;
-  current_enum_scope_start = 0;
-  enum_suppress_depth = 0;
+  free(es->known_members);
+  es->known_members = NULL;
+  es->known_member_count = 0;
+  es->known_member_cap = 0;
+  es->inline_member_count = 0;
+  es->enum_expression_depth = 0;
+  es->current_enum_inline_refs = false;
+  es->current_enum_scope_start = 0;
+  es->enum_suppress_depth = 0;
 }
 
 void skim_ts_enum_suppress_push(void) {
-  enum_suppress_depth++;
+  skim_enum_state_t *es = &skim_run->ts.enums;
+  es->enum_suppress_depth++;
 }
 
 void skim_ts_enum_suppress_pop(void) {
-  if (enum_suppress_depth > 0) enum_suppress_depth--;
+  skim_enum_state_t *es = &skim_run->ts.enums;
+  if (es->enum_suppress_depth > 0) es->enum_suppress_depth--;
 }
 
 static void remember_member(const char *enum_name, const char *member_name, enum_value_t value) {
-  if (enum_suppress_depth > 0) return;
-  if (known_member_count == known_member_cap) {
-    size_t cap = known_member_cap ? known_member_cap * 2 : 64;
-    enum_known_member_t *next = realloc(known_members, sizeof(*known_members) * cap);
+  skim_enum_state_t *es = &skim_run->ts.enums;
+  if (es->enum_suppress_depth > 0) return;
+  if (es->known_member_count == es->known_member_cap) {
+    size_t cap = es->known_member_cap ? es->known_member_cap * 2 : 64;
+    enum_known_member_t *next = realloc(es->known_members, sizeof(*es->known_members) * cap);
     if (!next) skim_die("out of memory");
-    known_members = next;
-    known_member_cap = cap;
+    es->known_members = next;
+    es->known_member_cap = cap;
   }
   size_t enum_len = strlen(enum_name);
   size_t member_len = strlen(member_name);
   size_t bucket = enum_member_hash(enum_name, enum_len, member_name, member_len);
   size_t *buckets = known_member_buckets();
-  known_members[known_member_count].enum_name = skim_slice_dup(enum_name, 0, enum_len);
-  known_members[known_member_count].member_name = skim_slice_dup(member_name, 0, member_len);
-  known_members[known_member_count].enum_name_len = enum_len;
-  known_members[known_member_count].member_name_len = member_len;
-  known_members[known_member_count].value = skim_enum_value_clone(value);
-  known_members[known_member_count].inline_ref = current_enum_inline_refs;
-  known_members[known_member_count].scope_start = current_enum_scope_start;
-  known_members[known_member_count].hash_bucket = bucket;
-  known_members[known_member_count].next_hash = buckets[bucket];
-  buckets[bucket] = known_member_count;
-  known_member_count++;
-  if (current_enum_inline_refs) skim_ts_enum_inline_member_count++;
+  es->known_members[es->known_member_count].enum_name = skim_slice_dup(enum_name, 0, enum_len);
+  es->known_members[es->known_member_count].member_name = skim_slice_dup(member_name, 0, member_len);
+  es->known_members[es->known_member_count].enum_name_len = enum_len;
+  es->known_members[es->known_member_count].member_name_len = member_len;
+  es->known_members[es->known_member_count].value = skim_enum_value_clone(value);
+  es->known_members[es->known_member_count].inline_ref = es->current_enum_inline_refs;
+  es->known_members[es->known_member_count].scope_start = es->current_enum_scope_start;
+  es->known_members[es->known_member_count].hash_bucket = bucket;
+  es->known_members[es->known_member_count].next_hash = buckets[bucket];
+  buckets[bucket] = es->known_member_count;
+  es->known_member_count++;
+  if (es->current_enum_inline_refs) es->inline_member_count++;
 }
 
 static void
@@ -150,10 +134,11 @@ static bool lookup_qualified_member_span(
   size_t member_len,
   enum_value_t *out
 ) {
+  skim_enum_state_t *es = &skim_run->ts.enums;
   size_t *buckets = known_member_buckets();
   for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
-       i = known_members[i].next_hash) {
-    enum_known_member_t *m = &known_members[i];
+       i = es->known_members[i].next_hash) {
+    enum_known_member_t *m = &es->known_members[i];
     if (m->enum_name_len != enum_len || m->member_name_len != member_len) continue;
     if (memcmp(enum_name, m->enum_name, enum_len) != 0 || memcmp(member_name, m->member_name, member_len) != 0)
       continue;
@@ -175,10 +160,11 @@ static bool lookup_inline_member_span(
   size_t member_len,
   enum_value_t *out
 ) {
+  skim_enum_state_t *es = &skim_run->ts.enums;
   size_t *buckets = known_member_buckets();
   for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
-       i = known_members[i].next_hash) {
-    enum_known_member_t *m = &known_members[i];
+       i = es->known_members[i].next_hash) {
+    enum_known_member_t *m = &es->known_members[i];
     if (m->enum_name_len != enum_len || m->member_name_len != member_len) continue;
     if (memcmp(enum_name, m->enum_name, enum_len) != 0 || memcmp(member_name, m->member_name, member_len) != 0)
       continue;
@@ -190,12 +176,13 @@ static bool lookup_inline_member_span(
 }
 
 static bool known_enum_member_name(const char *enum_name, const char *member_name) {
+  skim_enum_state_t *es = &skim_run->ts.enums;
   size_t enum_len = strlen(enum_name);
   size_t member_len = strlen(member_name);
   size_t *buckets = known_member_buckets();
   for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
-       i = known_members[i].next_hash) {
-    enum_known_member_t *m = &known_members[i];
+       i = es->known_members[i].next_hash) {
+    enum_known_member_t *m = &es->known_members[i];
     if (
       m->enum_name_len == enum_len && m->member_name_len == member_len &&
       memcmp(enum_name, m->enum_name, enum_len) == 0 && memcmp(member_name, m->member_name, member_len) == 0
@@ -359,28 +346,21 @@ static bool prior_value_decl(const char *src, size_t pos, const char *name) {
   return skim_decl_seen_before(src, name, pos, SKIM_DECL_VALUE);
 }
 
-enum { ENUM_SCOPE_STACK = 256 };
-
-static struct {
-  const char *src;
-  size_t i;
-  int depth;
-  size_t stack[ENUM_SCOPE_STACK];
-} enum_scope_scan;
-
 void skim_ts_enum_scope_invalidate(void) {
-  enum_scope_scan.src = NULL;
+  skim_enum_state_t *es = &skim_run->ts.enums;
+  es->enum_scope_scan.src = NULL;
 }
 
 static size_t enum_scope_start(const char *src, size_t len, size_t pos) {
-  if (enum_scope_scan.src != src || !skim_scan_cache_owns(src) || enum_scope_scan.i > pos) {
-    enum_scope_scan.src = src;
-    enum_scope_scan.i = 0;
-    enum_scope_scan.depth = 0;
+  skim_enum_state_t *es = &skim_run->ts.enums;
+  if (es->enum_scope_scan.src != src || !skim_scan_cache_owns(src) || es->enum_scope_scan.i > pos) {
+    es->enum_scope_scan.src = src;
+    es->enum_scope_scan.i = 0;
+    es->enum_scope_scan.depth = 0;
   }
-  size_t i = enum_scope_scan.i;
-  int depth = enum_scope_scan.depth;
-  size_t *stack = enum_scope_scan.stack;
+  size_t i = es->enum_scope_scan.i;
+  int depth = es->enum_scope_scan.depth;
+  size_t *stack = es->enum_scope_scan.stack;
   while (i < pos) {
     if (!skim_char_has(src[i], SKIM_CC_BALANCED)) {
       i++;
@@ -405,23 +385,24 @@ static size_t enum_scope_start(const char *src, size_t len, size_t pos) {
       continue;
     }
     if (src[i] == '{') {
-      if (depth < ENUM_SCOPE_STACK) stack[depth] = i;
+      if (depth < SKIM_ENUM_SCOPE_STACK) stack[depth] = i;
       depth++;
     } else if (src[i] == '}' && depth > 0) depth--;
     i++;
   }
-  enum_scope_scan.i = i;
-  enum_scope_scan.depth = depth;
+  es->enum_scope_scan.i = i;
+  es->enum_scope_scan.depth = depth;
   if (depth <= 0) return 0;
-  if (depth > ENUM_SCOPE_STACK) return pos;
+  if (depth > SKIM_ENUM_SCOPE_STACK) return pos;
   return stack[depth - 1];
 }
 
 static bool known_enum_in_scope(const char *name, size_t scope_start) {
+  skim_enum_state_t *es = &skim_run->ts.enums;
   size_t enum_len = strlen(name);
-  for (size_t i = 0; i < known_member_count; i++) {
-    if (known_members[i].scope_start != scope_start) continue;
-    if (known_members[i].enum_name_len == enum_len && memcmp(known_members[i].enum_name, name, enum_len) == 0)
+  for (size_t i = 0; i < es->known_member_count; i++) {
+    if (es->known_members[i].scope_start != scope_start) continue;
+    if (es->known_members[i].enum_name_len == enum_len && memcmp(es->known_members[i].enum_name, name, enum_len) == 0)
       return true;
   }
   return false;
@@ -460,6 +441,7 @@ static void trim_trailing_else(skim_str_t *out) {
 }
 
 bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) {
+  skim_enum_state_t *es = &skim_run->ts.enums;
   size_t i = *io;
   bool is_export = false;
   bool is_const = false;
@@ -494,12 +476,13 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
   }
   i++;
 
-  bool prev_inline_refs = current_enum_inline_refs;
-  current_enum_inline_refs = (is_const && skim_options.optimize_const_enums) || skim_options.optimize_enums;
+  bool prev_inline_refs = es->current_enum_inline_refs;
+  es->current_enum_inline_refs =
+    (is_const && skim_run->options.optimize_const_enums) || skim_run->options.optimize_enums;
   skim_str_t enum_out = {0};
   size_t scope_start = enum_scope_start(src, len, *io);
-  size_t prev_scope_start = current_enum_scope_start;
-  current_enum_scope_start = scope_start;
+  size_t prev_scope_start = es->current_enum_scope_start;
+  es->current_enum_scope_start = scope_start;
   bool scoped_enum = scope_start != 0;
   bool merge_assign = scoped_enum ? known_enum_in_scope(name, scope_start)
                                   : (prior_value_decl(src, *io, name) || known_enum_in_scope(name, scope_start));
@@ -508,7 +491,7 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
     skim_str_puts(&enum_out, " = function (");
   } else {
     if (is_export) skim_str_puts(&enum_out, "export ");
-    skim_str_puts(&enum_out, (is_export || enum_expression_depth || scoped_enum) ? "let " : "var ");
+    skim_str_puts(&enum_out, (is_export || es->enum_expression_depth || scoped_enum) ? "let " : "var ");
     skim_str_puts(&enum_out, name);
     skim_str_puts(&enum_out, " = function (");
   }
@@ -572,9 +555,9 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
       char *literal = skim_enum_value_to_literal(member_value);
       char *transformed = NULL;
       if (!literal && strstr(raw, "enum ")) {
-        enum_expression_depth++;
+        es->enum_expression_depth++;
         transformed = skim_transform_typescript(raw, strlen(raw));
-        enum_expression_depth--;
+        es->enum_expression_depth--;
       }
       char *rewritten =
         literal ? literal : (transformed ? transformed : rewrite_member_refs(raw, name, members, member_count));
@@ -618,7 +601,7 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
   skim_str_puts(&enum_out, "  return ");
   skim_str_puts(&enum_out, name);
   skim_str_puts(&enum_out, ";\n}(");
-  if (!merge_assign && (is_export || enum_expression_depth || scoped_enum)) {
+  if (!merge_assign && (is_export || es->enum_expression_depth || scoped_enum)) {
     skim_str_puts(&enum_out, "{}");
   } else {
     skim_str_puts(&enum_out, name);
@@ -636,8 +619,8 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
   }
   bool should_remove =
     (is_const &&
-     (skim_options.optimize_const_enums || (member_count == 0 && !enum_name_has_any_use(src, len, i, name)))) ||
-    (skim_options.optimize_enums && all_known && !is_export && !enum_name_has_value_use(src, len, i, name));
+     (skim_run->options.optimize_const_enums || (member_count == 0 && !enum_name_has_any_use(src, len, i, name)))) ||
+    (skim_run->options.optimize_enums && all_known && !is_export && !enum_name_has_value_use(src, len, i, name));
   if (should_remove) {
     bool after_else = is_const && member_count == 0 && removed_enum_after_else(src, *io);
     if (after_else) trim_trailing_else(out);
@@ -645,7 +628,7 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
     if (!after_else && is_const && member_count == 0 && removed_enum_needs_empty_block(src, *io))
       skim_str_puts(out, "{}");
   } else {
-    if (skim_options.optimize_enums && is_export && !merge_assign) {
+    if (skim_run->options.optimize_enums && is_export && !merge_assign) {
       skim_str_t rewritten = {0};
       char *call = strstr(enum_out.data, "}(");
       if (call) {
@@ -660,8 +643,8 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
     }
     skim_str_putn(out, enum_out.data, enum_out.len);
   }
-  current_enum_inline_refs = prev_inline_refs;
-  current_enum_scope_start = prev_scope_start;
+  es->current_enum_inline_refs = prev_inline_refs;
+  es->current_enum_scope_start = prev_scope_start;
   free(enum_out.data);
   *io = i;
   for (size_t m = 0; m < member_count; m++) {

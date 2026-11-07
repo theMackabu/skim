@@ -1,29 +1,32 @@
 #include "chars.h"
+#include "run.h"
 #include "scan_cache.h"
 #include "str.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 
-static skim_scan_cache_t scan_cache;
-
 void skim_scan_cache_enter(skim_scan_cache_t *saved, const char *src, size_t len) {
-  *saved = scan_cache;
-  scan_cache = (skim_scan_cache_t){.src = src, .len = len};
+  skim_scan_cache_t *cache = &skim_run->scan_cache;
+  *saved = (*cache);
+  (*cache) = (skim_scan_cache_t){.src = src, .len = len};
 }
 
 void skim_scan_cache_leave(const skim_scan_cache_t *saved) {
-  free(scan_cache.pairs);
-  free(scan_cache.pair_buckets);
-  scan_cache = *saved;
+  skim_scan_cache_t *cache = &skim_run->scan_cache;
+  free(cache->pairs);
+  free(cache->pair_buckets);
+  (*cache) = *saved;
 }
 
 bool skim_scan_cache_owns(const char *src) {
-  return src == scan_cache.src;
+  skim_scan_cache_t *cache = &skim_run->scan_cache;
+  return src == cache->src;
 }
 
 size_t skim_scan_cache_len(void) {
-  return scan_cache.len;
+  skim_scan_cache_t *cache = &skim_run->scan_cache;
+  return cache->len;
 }
 
 enum {
@@ -84,16 +87,17 @@ static void build_bracket_pairs(skim_scan_cache_t *cache) {
 }
 
 bool skim_back_skip_block(const char *src, size_t *k) {
-  if (src != scan_cache.src || scan_cache.len < MIN_INDEXED_SOURCE || scan_cache.len > UINT32_MAX) return false;
-  if (!scan_cache.pairs_built) build_bracket_pairs(&scan_cache);
+  skim_scan_cache_t *cache = &skim_run->scan_cache;
+  if (src != cache->src || cache->len < MIN_INDEXED_SOURCE || cache->len > UINT32_MAX) return false;
+  if (!cache->pairs_built) build_bracket_pairs(cache);
   size_t bucket = *k >> PAIR_BUCKET_SHIFT;
-  uint32_t lo = scan_cache.pair_buckets[bucket], hi = scan_cache.pair_buckets[bucket + 1];
+  uint32_t lo = cache->pair_buckets[bucket], hi = cache->pair_buckets[bucket + 1];
   while (lo < hi) {
     uint32_t mid = lo + (hi - lo) / 2;
-    if (scan_cache.pairs[mid].close < *k) lo = mid + 1;
+    if (cache->pairs[mid].close < *k) lo = mid + 1;
     else hi = mid;
   }
-  if (lo == scan_cache.pair_buckets[bucket + 1] || scan_cache.pairs[lo].close != *k) return false;
-  *k = scan_cache.pairs[lo].open;
+  if (lo == cache->pair_buckets[bucket + 1] || cache->pairs[lo].close != *k) return false;
+  *k = cache->pairs[lo].open;
   return true;
 }

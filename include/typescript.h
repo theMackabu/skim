@@ -12,7 +12,6 @@ bool skim_ts_enum_ref_try(skim_str_t *out, const char *src, size_t len, size_t *
 bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t *io);
 bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io);
 
-extern size_t skim_ts_enum_inline_member_count;
 void skim_ts_enum_reset(void);
 void skim_ts_enum_suppress_push(void);
 void skim_ts_enum_suppress_pop(void);

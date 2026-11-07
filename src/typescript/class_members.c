@@ -1,6 +1,7 @@
 #include "chars.h"
 #include "class_internal.h"
 #include "emit.h"
+#include "run.h"
 #include "skip.h"
 #include "str.h"
 #include "transform.h"
@@ -643,7 +644,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         return true;
       }
       if (j < end && src[j] == ';') {
-        if (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) {
+        if (skim_run->options.remove_class_fields_without_initializer || skim_run->options.allow_declare_fields_false) {
           skim_emit_preserved_newlines(out, src, i, j + 1);
           *io = j + 1;
           return true;
@@ -662,7 +663,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         return true;
       }
       if (type_end < end && ((src[type_end] == '\n' || src[type_end] == '\r') || skim_range_has_newline(src, type_end, j))) {
-        if (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) {
+        if (skim_run->options.remove_class_fields_without_initializer || skim_run->options.allow_declare_fields_false) {
           skim_emit_preserved_newlines(out, src, i, type_end);
           *io = type_end;
           return true;
@@ -680,7 +681,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         return true;
       }
       if (type_end >= end || j >= end) {
-        if (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) {
+        if (skim_run->options.remove_class_fields_without_initializer || skim_run->options.allow_declare_fields_false) {
           skim_emit_preserved_newlines(out, src, i, end);
           *io = end;
           return true;

@@ -1,3 +1,4 @@
+#include "run.h"
 #include "skim.h"
 #include "str.h"
 #include "transform.h"
@@ -9,7 +10,7 @@
 typedef struct {
   skim_str_t output;
   skim_str_t cleanup;
-  skim_transform_state_t transform;
+  skim_run_t run;
 } skim_context_impl_t;
 
 static void write_error(char *out, size_t out_len, const char *msg) {
@@ -105,7 +106,7 @@ void skim_context_deinit(skim_context_t *ctx) {
   if (!impl) return;
   free(impl->output.data);
   free(impl->cleanup.data);
-  skim_transform_state_free(&impl->transform);
+  skim_run_free(&impl->run);
   free(impl);
   ctx->impl = NULL;
 }
@@ -140,16 +141,12 @@ const char *skim_strip_typescript_borrowed(
     return NULL;
   }
 
-  skim_options_t previous = skim_options;
-  skim_source_mode_t previous_source_mode = skim_source_mode;
-  skim_transform_state_t *previous_state = skim_state;
-  skim_options = options ? *options : (skim_options_t){0};
-  skim_source_mode = resolve_source_mode(filename, source_mode);
-  skim_state = &impl->transform;
+  skim_run_t *previous_run = skim_run;
+  impl->run.options = options ? *options : (skim_options_t){0};
+  impl->run.source_mode = resolve_source_mode(filename, source_mode);
+  skim_run = &impl->run;
   skim_transform_typescript_into(input, input_len, &impl->output, &impl->cleanup);
-  skim_options = previous;
-  skim_source_mode = previous_source_mode;
-  skim_state = previous_state;
+  skim_run = previous_run;
 
   if (!impl->output.data) {
     if (out_error) *out_error = SKIM_ERR_TRANSFORM_FAILED;

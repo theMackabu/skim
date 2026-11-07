@@ -1,4 +1,5 @@
 #include "chars.h"
+#include "run.h"
 #include "scan_cache.h"
 #include "skip.h"
 #include "type_syntax.h"
@@ -133,19 +134,13 @@ static bool colon_looks_like_statement_label(const char *src, size_t len, size_t
          skim_word_at(src, len, next, "continue");
 }
 
-enum { OBJECT_SCAN_MEMO_SIZE = 256 };
-
-static struct {
-  const char *src;
-  size_t pos_plus_one[OBJECT_SCAN_MEMO_SIZE];
-  bool result[OBJECT_SCAN_MEMO_SIZE];
-} object_scan_memo;
-
 void skim_ts_annotations_memo_invalidate(void) {
-  object_scan_memo.src = NULL;
+  skim_object_scan_memo_t *memo = &skim_run->ts.object_memo;
+  memo->src = NULL;
 }
 
 static bool value_object_scan(const char *src, size_t i, bool memo_active) {
+  skim_object_scan_memo_t *memo = &skim_run->ts.object_memo;
   int paren = 0, bracket = 0, brace = 0;
   for (size_t k = i; k > 0;) {
     char c = src[--k];
@@ -173,24 +168,25 @@ static bool value_object_scan(const char *src, size_t i, bool memo_active) {
     } else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) {
       return false;
     } else if (c == ':' && memo_active && paren == 0 && bracket == 0 && brace == 0) {
-      size_t slot = k % OBJECT_SCAN_MEMO_SIZE;
-      if (object_scan_memo.pos_plus_one[slot] == k + 1) return object_scan_memo.result[slot];
+      size_t slot = k % SKIM_OBJECT_SCAN_MEMO_SIZE;
+      if (memo->pos_plus_one[slot] == k + 1) return memo->result[slot];
     }
   }
   return false;
 }
 
 static bool colon_looks_like_value_object_property(const char *src, size_t i) {
+  skim_object_scan_memo_t *memo = &skim_run->ts.object_memo;
   if (prev_non_ws_char(src, i) == ')') return false;
   if (!skim_scan_cache_owns(src)) return value_object_scan(src, i, false);
-  if (object_scan_memo.src != src) {
-    memset(object_scan_memo.pos_plus_one, 0, sizeof(object_scan_memo.pos_plus_one));
-    object_scan_memo.src = src;
+  if (memo->src != src) {
+    memset(memo->pos_plus_one, 0, sizeof(memo->pos_plus_one));
+    memo->src = src;
   }
   bool result = value_object_scan(src, i, true);
-  size_t slot = i % OBJECT_SCAN_MEMO_SIZE;
-  object_scan_memo.pos_plus_one[slot] = i + 1;
-  object_scan_memo.result[slot] = result;
+  size_t slot = i % SKIM_OBJECT_SCAN_MEMO_SIZE;
+  memo->pos_plus_one[slot] = i + 1;
+  memo->result[slot] = result;
   return result;
 }
 

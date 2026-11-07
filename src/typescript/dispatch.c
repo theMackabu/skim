@@ -1,4 +1,5 @@
 #include "chars.h"
+#include "run.h"
 #include "skip.h"
 #include "str.h"
 #include "transform.h"
@@ -86,13 +87,13 @@ bool skim_transform_try_at(skim_str_t *out, const char *src, size_t len, size_t 
   }
 
   if (
-    (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) &&
+    (skim_run->options.remove_class_fields_without_initializer || skim_run->options.allow_declare_fields_false) &&
     skim_is_id_start(src[i]) && skim_ts_annotations_try(out, src, len, io)
   ) {
     return true;
   }
   if (
-    skim_ts_enum_inline_member_count && next_non_ws_is_member_access(src, len, i) &&
+    skim_run->ts.enums.inline_member_count && next_non_ws_is_member_access(src, len, i) &&
     skim_ts_enum_ref_try(out, src, len, io)
   )
     return true;

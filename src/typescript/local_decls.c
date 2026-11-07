@@ -1,4 +1,5 @@
 #include "chars.h"
+#include "run.h"
 #include "scan_cache.h"
 #include "skip.h"
 #include "str.h"
@@ -7,25 +8,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
-  size_t pos;
-  size_t name_start;
-  size_t name_end;
-} local_decl_t;
-
-static struct {
-  const char *src;
-  local_decl_t *items;
-  size_t count;
-  size_t cap;
-} local_decl_index;
-
 void skim_ts_namespace_decl_index_invalidate(void) {
-  free(local_decl_index.items);
-  local_decl_index.items = NULL;
-  local_decl_index.src = NULL;
-  local_decl_index.count = 0;
-  local_decl_index.cap = 0;
+  skim_local_decl_index_t *decl_index = &skim_run->ts.local_decls;
+  free(decl_index->items);
+  decl_index->items = NULL;
+  decl_index->src = NULL;
+  decl_index->count = 0;
+  decl_index->cap = 0;
 }
 
 static size_t local_decl_keyword_len(const char *word, size_t n) {
@@ -36,8 +25,9 @@ static size_t local_decl_keyword_len(const char *word, size_t n) {
 }
 
 static void local_decls_for_source(const char *src, size_t len) {
+  skim_local_decl_index_t *decl_index = &skim_run->ts.local_decls;
   skim_ts_namespace_decl_index_invalidate();
-  local_decl_index.src = src;
+  decl_index->src = src;
   for (size_t i = 0; i < len;) {
     if (!skim_is_id_part(src[i])) {
       i++;
@@ -51,24 +41,25 @@ static void local_decls_for_source(const char *src, size_t len) {
     size_t name_start = 0, name_end = 0;
     skim_parse_identifier(src, len, i, &name_start, &name_end);
     if (name_end == name_start) continue;
-    if (local_decl_index.count == local_decl_index.cap) {
-      size_t cap = local_decl_index.cap ? local_decl_index.cap * 2 : 128;
-      local_decl_t *next = realloc(local_decl_index.items, sizeof(*next) * cap);
+    if (decl_index->count == decl_index->cap) {
+      size_t cap = decl_index->cap ? decl_index->cap * 2 : 128;
+      local_decl_t *next = realloc(decl_index->items, sizeof(*next) * cap);
       if (!next) skim_die("out of memory");
-      local_decl_index.items = next;
-      local_decl_index.cap = cap;
+      decl_index->items = next;
+      decl_index->cap = cap;
     }
-    local_decl_index.items[local_decl_index.count++] =
+    decl_index->items[decl_index->count++] =
       (local_decl_t){.pos = word, .name_start = name_start, .name_end = name_end};
   }
 }
 
 bool skim_ts_local_value_decl_before(const char *src, size_t len, size_t pos, const char *name) {
+  skim_local_decl_index_t *decl_index = &skim_run->ts.local_decls;
   if (!skim_scan_cache_owns(src)) local_decls_for_source(src, len);
-  else if (local_decl_index.src != src) local_decls_for_source(src, skim_scan_cache_len());
+  else if (decl_index->src != src) local_decls_for_source(src, skim_scan_cache_len());
   size_t name_len = strlen(name);
-  for (size_t i = 0; i < local_decl_index.count && local_decl_index.items[i].pos < pos; i++) {
-    const local_decl_t *decl = &local_decl_index.items[i];
+  for (size_t i = 0; i < decl_index->count && decl_index->items[i].pos < pos; i++) {
+    const local_decl_t *decl = &decl_index->items[i];
     if (decl->name_end > len || decl->name_end - decl->name_start != name_len) continue;
     if (memcmp(src + decl->name_start, name, name_len) == 0) return true;
   }
