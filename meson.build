@@ -1,7 +1,8 @@
 project('skim', 'c',
-  version: '0.0.13',
+  version: '0.1.1',
   license: 'MIT',
   default_options: [
+    'buildtype=release',
     'c_std=c23',
     'default_library=both',
     'warning_level=2',
@@ -21,7 +22,6 @@ skim_dep_api_args = library_kind == 'static' ? static_api_args : []
 skim_sources = files(
   'src/ast.c',
   'src/emit.c',
-  'src/emit_fast.c',
   'src/lexer.c',
   'src/module_markers.c',
   'src/parser.c',
@@ -72,6 +72,13 @@ skim_cli = executable('skim',
   c_args: ['-DSKIM_VERSION="' + meson.project_version() + '"'],
   override_options: ['optimization=3'],
   install: true,
+)
+
+skim_bench = executable('skim_bench',
+  files('tests/bench.c'),
+  dependencies: skim_cli_dep,
+  override_options: ['optimization=3'],
+  build_by_default: false,
 )
 
 install_headers('skim.h')

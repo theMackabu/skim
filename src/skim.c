@@ -1,6 +1,7 @@
 #include "skim.h"
 #include "skim_internal.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,13 @@ static bool valid_utf8(const char *src, size_t len) {
   const unsigned char *p = (const unsigned char *)src;
   size_t i = 0;
   while (i < len) {
+    while (i + sizeof(uint64_t) <= len) {
+      uint64_t word;
+      memcpy(&word, p + i, sizeof(word));
+      if (word & 0x8080808080808080ull) break;
+      i += sizeof(word);
+    }
+    if (i >= len) break;
     unsigned char c = p[i++];
     if (c < 0x80) continue;
 
@@ -56,19 +64,6 @@ static bool valid_utf8(const char *src, size_t len) {
   return true;
 }
 
-static skim_options_t to_internal_options(const skim_options_t *options) {
-  if (!options) return (skim_options_t){0};
-  return (skim_options_t){
-    .only_remove_type_imports = options->only_remove_type_imports,
-    .optimize_enums = options->optimize_enums,
-    .optimize_const_enums = options->optimize_const_enums,
-    .remove_class_fields_without_initializer = options->remove_class_fields_without_initializer,
-    .allow_declare_fields_false = options->allow_declare_fields_false,
-    .transform_class_properties = options->transform_class_properties,
-    .set_public_class_fields = options->set_public_class_fields,
-  };
-}
-
 static bool filename_has_suffix(const char *filename, const char *suffix) {
   if (!filename || !suffix) return false;
   size_t filename_len = strlen(filename);
@@ -77,17 +72,8 @@ static bool filename_has_suffix(const char *filename, const char *suffix) {
 }
 
 static skim_source_mode_t infer_source_mode(const char *filename) {
-  if (
-    filename_has_suffix(filename, ".cts") || filename_has_suffix(filename, ".cjs") ||
-    filename_has_suffix(filename, ".d.cts")
-  )
-    return SKIM_SOURCE_COMMONJS;
-  if (
-    filename_has_suffix(filename, ".mts") || filename_has_suffix(filename, ".mjs") ||
-    filename_has_suffix(filename, ".d.mts")
-  )
-    return SKIM_SOURCE_MODULE;
-  return SKIM_SOURCE_MODULE;
+  bool commonjs = filename_has_suffix(filename, ".cts") || filename_has_suffix(filename, ".cjs");
+  return commonjs ? SKIM_SOURCE_COMMONJS : SKIM_SOURCE_MODULE;
 }
 
 static skim_source_mode_t resolve_source_mode(const char *filename, skim_source_mode_t source_mode) {
@@ -140,7 +126,6 @@ const char *skim_strip_typescript_borrowed(
   if (out_error) *out_error = SKIM_ERR_NULL_INPUT;
 
   if (!impl) {
-    if (out_error) *out_error = SKIM_ERR_NULL_INPUT;
     write_error(error_output, error_output_len, "null context passed");
     return NULL;
   }
@@ -157,7 +142,7 @@ const char *skim_strip_typescript_borrowed(
   skim_options_t previous = skim_options;
   skim_source_mode_t previous_source_mode = skim_source_mode;
   skim_transform_state_t *previous_state = skim_state;
-  skim_options = to_internal_options(options);
+  skim_options = options ? *options : (skim_options_t){0};
   skim_source_mode = resolve_source_mode(filename, source_mode);
   skim_state = &impl->transform;
   skim_transform_typescript_into(input, input_len, &impl->output, &impl->cleanup);

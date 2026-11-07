@@ -1,12 +1,10 @@
 #include "ast.h"
 
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
 skim_options_t skim_options;
 skim_transform_state_t *skim_state;
-skim_transform_state_t skim_default_state;
 
 static size_t transform_depth;
 skim_source_mode_t skim_source_mode = SKIM_SOURCE_MODULE;
@@ -43,7 +41,7 @@ static void cleanup_trim_trailing_horizontal_space(skim_str_t *out) {
 
 static char cleanup_prev_non_ws(const skim_str_t *out) {
   size_t i = out->len;
-  while (i > 0 && isspace((unsigned char)out->data[i - 1]))
+  while (i > 0 && skim_is_space(out->data[i - 1]))
     i--;
   return i > 0 ? out->data[i - 1] : '\0';
 }
@@ -95,10 +93,7 @@ static size_t cleanup_copy_line_comment(skim_str_t *out, const char *src, size_t
 
 static size_t cleanup_copy_block_comment(skim_str_t *out, const char *src, size_t len, size_t i) {
   size_t start = i;
-  i += 2;
-  while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-    i++;
-  if (i + 1 < len) i += 2;
+  i = skim_skip_block_comment(src, len, i + 2);
   skim_str_putn(out, src + start, i - start);
   return i;
 }
@@ -114,6 +109,18 @@ static void cleanup_output_spacing(skim_str_t *out, skim_str_t *scratch) {
 
   size_t i = cleanup_skip_ws(src, len, 0);
   for (; i < len;) {
+    if (!(skim_char_class[(unsigned char)src[i]] & SKIM_CC_CLEANUP_SPECIAL)) {
+      skim_str_reserve(&cleaned, len - i);
+      char *dst = cleaned.data + cleaned.len;
+      size_t run = i;
+      do {
+        *dst++ = src[run++];
+      } while (run < len && !skim_char_has(src[run], SKIM_CC_CLEANUP_SPECIAL));
+      *dst = '\0';
+      cleaned.len += run - i;
+      i = run;
+      continue;
+    }
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
       i = cleanup_copy_string(&cleaned, src, len, i);
       continue;
@@ -132,11 +139,11 @@ static void cleanup_output_spacing(skim_str_t *out, skim_str_t *scratch) {
       i = after;
       continue;
     }
-    if (isspace((unsigned char)src[i])) {
+    if (skim_is_space(src[i])) {
       bool has_newline = false;
       size_t last_newline = i;
       size_t j = i;
-      while (j < len && isspace((unsigned char)src[j])) {
+      while (j < len && skim_is_space(src[j])) {
         if (src[j] == '\n' || src[j] == '\r') {
           has_newline = true;
           last_newline = j;
@@ -147,8 +154,10 @@ static void cleanup_output_spacing(skim_str_t *out, skim_str_t *scratch) {
         cleanup_trim_trailing_horizontal_space(&cleaned);
         if (cleaned.len > 0 && cleaned.data[cleaned.len - 1] != '\n') skim_str_putc(&cleaned, '\n');
         size_t indent = last_newline + 1;
-        while (indent < j && (src[indent] == ' ' || src[indent] == '\t'))
-          skim_str_putc(&cleaned, src[indent++]);
+        size_t indent_end = indent;
+        while (indent_end < j && (src[indent_end] == ' ' || src[indent_end] == '\t'))
+          indent_end++;
+        skim_str_putn(&cleaned, src + indent, indent_end - indent);
       } else {
         skim_str_putc(&cleaned, ' ');
       }
@@ -196,6 +205,8 @@ static void cleanup_output_spacing(skim_str_t *out, skim_str_t *scratch) {
 
 void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out, skim_str_t *scratch) {
   bool root_transform = transform_depth++ == 0;
+  skim_scan_cache_t saved_cache;
+  skim_scan_cache_enter(&saved_cache, src, len);
   if (root_transform) {
     skim_decl_reset();
     skim_ts_enum_reset();
@@ -209,9 +220,8 @@ void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out
   skim_ast_print_program(&program, out);
   skim_ast_free_program(&program);
   if (
-    source_mode_needs_module_marker() && !skim_has_module_syntax(out->data ? out->data : "", out->len) &&
-    (skim_has_erasable_import_syntax(src, len) || skim_has_export_declare(src, len) ||
-     skim_has_type_only_module_syntax(src, len))
+    source_mode_needs_module_marker() && skim_source_has_module_word(src, len) &&
+    !skim_has_module_syntax(out->data ? out->data : "", out->len) && skim_source_needs_module_marker(src, len)
   ) {
     if (skim_has_effective_code(out->data ? out->data : "", out->len)) skim_str_putc(out, '\n');
     else {
@@ -221,6 +231,7 @@ void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out
     skim_str_puts(out, "export {};\n");
   }
   if (root_transform) cleanup_output_spacing(out, scratch);
+  skim_scan_cache_leave(&saved_cache);
   transform_depth--;
   if (root_transform) {
     skim_ts_enum_reset();
@@ -230,13 +241,8 @@ void skim_transform_typescript_into(const char *src, size_t len, skim_str_t *out
   if (!out->data) skim_str_reserve(out, 0);
 }
 
-char *skim_transform_typescript_len(const char *src, size_t len, size_t *out_len) {
+char *skim_transform_typescript(const char *src, size_t len) {
   skim_str_t out = {0};
   skim_transform_typescript_into(src, len, &out, NULL);
-  if (out_len) *out_len = out.len;
   return out.data ? out.data : skim_slice_dup("", 0, 0);
-}
-
-char *skim_transform_typescript(const char *src, size_t len) {
-  return skim_transform_typescript_len(src, len, NULL);
 }

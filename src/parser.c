@@ -1,8 +1,6 @@
 #include "syntax.h"
 
-#include <ctype.h>
 #include <stdlib.h>
-#include <string.h>
 
 static void
 push_item(skim_ast_program_t *program, skim_ast_item_kind_t kind, size_t start, size_t content_start, size_t end) {
@@ -22,20 +20,13 @@ push_item(skim_ast_program_t *program, skim_ast_item_kind_t kind, size_t start, 
   };
 }
 
-static bool range_has_newline(const char *src, size_t start, size_t end) {
-  for (size_t i = start; i < end; i++) {
-    if (src[i] == '\n' || src[i] == '\r') return true;
-  }
-  return false;
-}
-
 static bool declaration_name_on_same_line(const char *src, size_t len, size_t kw_end) {
-  skim_syntax_token_t next = skim_syntax_token_at(src, len, kw_end, true);
-  return next.kind != SKIM_TOKEN_EOF && !range_has_newline(src, kw_end, next.start);
+  skim_syntax_token_t next = skim_syntax_token_at(src, len, kw_end);
+  return next.kind != SKIM_TOKEN_EOF && !skim_range_has_newline(src, kw_end, next.start);
 }
 
 static bool module_name_is_in_operator(const char *src, size_t len, size_t kw_end) {
-  skim_syntax_token_t next = skim_syntax_token_at(src, len, kw_end, true);
+  skim_syntax_token_t next = skim_syntax_token_at(src, len, kw_end);
   return next.kind == SKIM_TOKEN_IDENTIFIER && next.end - next.start == 2 && memcmp(src + next.start, "in", 2) == 0;
 }
 
@@ -63,7 +54,7 @@ static skim_ast_item_kind_t classify_item(const char *src, size_t len, skim_synt
   case SKIM_KEYWORD_CLASS:
     return SKIM_AST_ITEM_CLASS;
   case SKIM_KEYWORD_CONST: {
-    skim_syntax_token_t next = skim_syntax_token_at(src, len, token.end, true);
+    skim_syntax_token_t next = skim_syntax_token_at(src, len, token.end);
     return next.keyword == SKIM_KEYWORD_ENUM ? SKIM_AST_ITEM_ENUM : SKIM_AST_ITEM_TEXT;
   }
   default:
@@ -165,19 +156,8 @@ static size_t skip_ts_type_tail_for_item(const char *src, size_t len, size_t i) 
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
-    if (isspace((unsigned char)c)) {
+    if (skim_skip_comment(src, len, &i)) continue;
+    if (skim_is_space(c)) {
       i++;
       continue;
     }
@@ -225,7 +205,7 @@ static bool prev_allows_asi_item(const char *src, size_t i) {
     }
   }
   i = comment;
-  while (i > 0 && isspace((unsigned char)src[i - 1]))
+  while (i > 0 && skim_is_space(src[i - 1]))
     i--;
   if (i == 0) return false;
   size_t word_end = i;
@@ -279,6 +259,10 @@ static size_t variable_item_end(const char *src, size_t len, size_t i) {
   int paren = 0, bracket = 0, brace = 0;
   while (i < len) {
     char c = src[i];
+    if (!skim_char_has(c, SKIM_CC_ITEM_END)) {
+      i++;
+      continue;
+    }
     if (c == '\'' || c == '"' || c == '`') {
       i = skim_skip_string_raw(src, len, i);
       continue;
@@ -295,10 +279,7 @@ static size_t variable_item_end(const char *src, size_t len, size_t i) {
       continue;
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
+      i = skim_skip_block_comment(src, len, i + 2);
       continue;
     }
     if (c == ':' && paren == 0 && bracket == 0 && brace == 0) {
@@ -345,6 +326,10 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
   int paren = 0, bracket = 0, brace = 0;
   while (i < len) {
     char c = src[i];
+    if (!skim_char_has(c, SKIM_CC_ITEM_END)) {
+      i++;
+      continue;
+    }
     if (c == '\'' || c == '"' || c == '`') {
       i = skim_skip_string_raw(src, len, i);
       continue;
@@ -370,10 +355,7 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
       continue;
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
+      i = skim_skip_block_comment(src, len, i + 2);
       continue;
     }
     if (c == '(') paren++;
@@ -405,7 +387,7 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
 
 static char out_prev_non_ws(const skim_str_t *out) {
   size_t i = out->len;
-  while (i > 0 && isspace((unsigned char)out->data[i - 1]))
+  while (i > 0 && skim_is_space(out->data[i - 1]))
     i--;
   return i > 0 ? out->data[i - 1] : '\0';
 }
@@ -460,7 +442,7 @@ static size_t item_end_for_kind(const char *src, size_t len, size_t content_star
   if (skim_word_at(src, len, type, "declare")) type = skim_skip_ws_comments(src, len, type + 7);
   if (skim_word_at(src, len, type, "type")) {
     size_t name = skim_skip_ws_comments(src, len, type + 4);
-    if (name < len && skim_is_id_start(src[name]) && !range_has_newline(src, type + 4, name))
+    if (name < len && skim_is_id_start(src[name]) && !skim_range_has_newline(src, type + 4, name))
       return skim_skip_type_alias(src, len, type);
   }
   if (item_is_variable_decl(src, len, content_start)) return variable_item_end(src, len, content_start);
@@ -474,7 +456,7 @@ void skim_parse_program(skim_ast_program_t *program, const char *src, size_t len
   *program = (skim_ast_program_t){.src = src, .len = len};
   for (size_t i = 0; i < len;) {
     size_t start = i;
-    skim_syntax_token_t first = skim_syntax_token_at(src, len, i, true);
+    skim_syntax_token_t first = skim_syntax_token_at(src, len, i);
     size_t content_start = first.start;
     if (first.kind == SKIM_TOKEN_EOF) {
       push_item(program, SKIM_AST_ITEM_TEXT, start, content_start, len);

@@ -50,6 +50,41 @@ const cases = [
   ['import_equals.cjs.ts', 'function\n']
 ];
 
+const exactCases = [
+  ['export declare const x: number;\n', 'export {};\n'],
+  ['// leading comment\nimport { A } from "a";\nlet x: A;\n', '// leading comment\nlet x;\nexport {};\n'],
+  ['export { };\n', 'export {};\n'],
+  ['type T = 1;\nexport { T };\n', 'export {};\n'],
+  ['declare module "m" { import y from "z"; export interface I {} }\n', ''],
+  ['export = 1;\n', 'module.exports = 1;\n'],
+  ['enum E { A = 1 << 31, B = 1 << 32, C = 1e10 | 0, D = ~4294967296 }\nE;\n',
+    'var E = function(E) {\n  E[E["A"] = -2147483648] = "A";\n  E[E["B"] = 1] = "B";\n  E[E["C"] = 1410065408] = "C";\n  E[E["D"] = -1] = "D";\n  return E;\n}(E || {});\nE;\n']
+];
+
+exactCases.forEach(([source, expected], index) => {
+  const file = path.join(tmp, `exact_${index}.ts`);
+  fs.writeFileSync(file, source);
+  const result = run(bin, [file]);
+  assertOk(result, `exact case ${index}`);
+  const actual = result.stdout.replace(/function \(/g, 'function(');
+  if (actual !== expected) {
+    throw new Error(`exact case ${index} mismatch\nsource:\n${source}\nexpected:\n${expected}\nactual:\n${actual}`);
+  }
+});
+
+const truncatedCases = ['namespace My.Internal {', 'export namespace A.B {', "x['abc", 'enum E { A', 'class C { m(', '/* open', '`${'];
+const optimizing = ['--optimize-enums', '--optimize-const-enums'];
+truncatedCases.forEach((source, index) => {
+  const file = path.join(tmp, `truncated_${index}.ts`);
+  fs.writeFileSync(file, `enum x { abc = 1 }\n${source}`);
+  for (const args of [[], optimizing]) {
+    const result = run(bin, [...args, file]);
+    if (result.signal || result.status !== 0) {
+      throw new Error(`truncated case ${JSON.stringify(source)} failed: status=${result.status} signal=${result.signal}`);
+    }
+  }
+});
+
 for (const support of fs.readdirSync(path.join(here, 'fixtures')).filter(name => name.endsWith('.mjs') || name.endsWith('.cjs'))) {
   fs.copyFileSync(path.join(here, 'fixtures', support), path.join(tmp, support));
 }

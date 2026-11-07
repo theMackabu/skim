@@ -1,9 +1,8 @@
 #include "skim_internal.h"
 
-#include <ctype.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 
 static size_t export_type_statement_end(const char *src, size_t len, size_t i);
 
@@ -66,8 +65,7 @@ static size_t import_statement_end(const char *src, size_t len, size_t i) {
   return i;
 }
 
-static size_t trim_left(const char *src, size_t len, size_t i, size_t end) {
-  (void)len;
+static size_t trim_left(const char *src, size_t i, size_t end) {
   while (i < end && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r'))
     i++;
   return i;
@@ -100,22 +98,14 @@ static size_t prev_non_ws_pos(const char *src, size_t pos) {
   return pos > 0 ? pos - 1 : (size_t)-1;
 }
 
-static bool word_before_pos(const char *src, size_t pos, const char *word) {
-  while (pos > 0 && (src[pos - 1] == ' ' || src[pos - 1] == '\t' || src[pos - 1] == '\n' || src[pos - 1] == '\r'))
-    pos--;
-  size_t end = pos;
-  while (pos > 0 && skim_is_id_part(src[pos - 1]))
-    pos--;
-  size_t n = strlen(word);
-  return end - pos == n && memcmp(src + pos, word, n) == 0;
-}
-
 static bool colon_looks_like_value_object_property(const char *src, size_t colon) {
   if (prev_non_ws(src, colon) == ')') return false;
 
   int paren = 0, bracket = 0, brace = 0;
   for (size_t k = colon; k > 0;) {
     char c = src[--k];
+    if (!skim_char_has(c, SKIM_CC_BACK_STOP)) continue;
+    if ((c == ')' || c == ']' || c == '}') && skim_back_skip_block(src, &k)) continue;
     if (c == ')') paren++;
     else if (c == '(') {
       if (paren > 0) paren--;
@@ -134,60 +124,13 @@ static bool colon_looks_like_value_object_property(const char *src, size_t colon
         char prev = src[before];
         if (prev == ':' && colon_looks_like_value_object_property(src, before)) return true;
         return prev == '=' || prev == '(' || prev == ',' || prev == '[' || prev == '?' ||
-               word_before_pos(src, before + 1, "return") || word_before_pos(src, before + 1, "yield");
+               word_before_is(src, before + 1, "return") || word_before_is(src, before + 1, "yield");
       }
     } else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) {
       return false;
     }
   }
   return false;
-}
-
-static bool colon_looks_like_ternary(const char *src, size_t colon) {
-  int paren = 0, bracket = 0, brace = 0;
-  for (size_t k = colon; k > 0;) {
-    char c = src[--k];
-    if (c == ')') paren++;
-    else if (c == '(' && paren > 0) paren--;
-    else if (c == '(' && paren == 0 && bracket == 0 && brace == 0) return false;
-    else if (c == ']') bracket++;
-    else if (c == '[' && bracket > 0) bracket--;
-    else if (c == '}') brace++;
-    else if (c == '{') {
-      if (brace == 0 && paren == 0 && bracket == 0) return false;
-      if (brace > 0) brace--;
-    } else if (c == '?' && paren == 0 && bracket == 0 && brace == 0) {
-      if (k + 1 == colon && k > 0 && skim_is_id_part(src[k - 1])) return false;
-      return true;
-    } else if ((c == ';' || c == ':') && paren == 0 && bracket == 0 && brace == 0) {
-      return false;
-    }
-  }
-  return false;
-}
-
-static bool colon_looks_like_case_label(const char *src, size_t colon) {
-  size_t k = colon;
-  while (k > 0 && src[k - 1] != '\n' && src[k - 1] != '\r' && src[k - 1] != ';')
-    k--;
-  size_t line = skim_skip_ws(src, colon, k);
-  if (!skim_word_at(src, colon, line, "case") && !skim_word_at(src, colon, line, "default")) return false;
-
-  int paren = 0, bracket = 0, brace = 0;
-  for (size_t p = line; p < colon; p++) {
-    char c = src[p];
-    if (c == '\'' || c == '"' || c == '`') {
-      p = skim_skip_string_raw(src, colon, p) - 1;
-      continue;
-    }
-    if (c == '(') paren++;
-    else if (c == ')' && paren > 0) paren--;
-    else if (c == '[') bracket++;
-    else if (c == ']' && bracket > 0) bracket--;
-    else if (c == '{') brace++;
-    else if (c == '}' && brace > 0) brace--;
-  }
-  return paren == 0 && bracket == 0 && brace == 0;
 }
 
 static bool colon_looks_like_statement_label(const char *src, size_t len, size_t colon) {
@@ -245,7 +188,7 @@ static bool occurrence_is_type_position(const char *src, size_t len, size_t pos)
   char prev = prev_pos == (size_t)-1 ? '\0' : src[prev_pos];
   if (
     prev == ':' &&
-    (colon_looks_like_ternary(src, prev_pos) || colon_looks_like_case_label(src, prev_pos) ||
+    (skim_colon_looks_like_ternary(src, prev_pos) || skim_colon_looks_like_case_label(src, prev_pos) ||
      colon_looks_like_statement_label(src, len, prev_pos) || colon_looks_like_value_object_property(src, prev_pos))
   )
     return false;
@@ -281,42 +224,64 @@ static bool type_statement_keyword_at(const char *src, size_t len, size_t pos) {
   return false;
 }
 
-static char *local_name_from_specifier(const char *src, size_t start, size_t end) {
-  start = trim_left(src, end, start, end);
+static bool
+local_name_span_from_specifier(const char *src, size_t start, size_t end, size_t *name_start, size_t *name_end) {
+  start = trim_left(src, start, end);
   end = trim_right(src, start, end);
-  if (skim_word_at(src, end, start, "type")) start = trim_left(src, end, start + 4, end);
-  size_t as_pos = start;
-  while (as_pos < end) {
+  if (skim_word_at(src, end, start, "type")) start = trim_left(src, start + 4, end);
+  *name_start = *name_end = 0;
+  for (size_t as_pos = start; as_pos < end; as_pos++) {
     if (skim_word_at(src, end, as_pos, "as")) {
-      size_t name_start = 0, name_end = 0;
-      skim_parse_identifier(src, end, as_pos + 2, &name_start, &name_end);
-      if (name_start != name_end) return skim_slice_dup(src, name_start, name_end);
+      skim_parse_identifier(src, end, as_pos + 2, name_start, name_end);
+      if (*name_start != *name_end) return true;
     }
-    as_pos++;
   }
+  skim_parse_identifier(src, end, start, name_start, name_end);
+  return *name_start != *name_end;
+}
+
+static char *local_name_from_specifier(const char *src, size_t start, size_t end) {
   size_t name_start = 0, name_end = 0;
-  skim_parse_identifier(src, end, start, &name_start, &name_end);
-  if (name_start == name_end) return NULL;
+  if (!local_name_span_from_specifier(src, start, end, &name_start, &name_end)) return NULL;
   return skim_slice_dup(src, name_start, name_end);
 }
 
 static bool specifier_is_explicit_type(const char *src, size_t start, size_t end) {
-  start = trim_left(src, end, start, end);
+  start = trim_left(src, start, end);
   return skim_word_at(src, end, start, "type");
 }
 
 static char *exported_binding_from_specifier(const char *src, size_t start, size_t end) {
-  start = trim_left(src, end, start, end);
-  if (skim_word_at(src, end, start, "type")) start = trim_left(src, end, start + 4, end);
+  start = trim_left(src, start, end);
+  if (skim_word_at(src, end, start, "type")) start = trim_left(src, start + 4, end);
   size_t name_start = 0, name_end = 0;
   skim_parse_identifier(src, end, start, &name_start, &name_end);
   if (name_start == name_end) return NULL;
   return skim_slice_dup(src, name_start, name_end);
+}
+
+static bool
+specifier_list_declares(const char *src, size_t brace, size_t close, const char *name, size_t n, bool type_only) {
+  size_t item_start = brace + 1;
+  for (size_t p = brace + 1; p <= close - 1; p++) {
+    if (p < close - 1 && src[p] != ',') continue;
+    if (!type_only || specifier_is_explicit_type(src, item_start, p)) {
+      size_t name_start = 0, name_end = 0;
+      if (
+        local_name_span_from_specifier(src, item_start, p, &name_start, &name_end) && name_end - name_start == n &&
+        memcmp(src + name_start, name, n) == 0
+      )
+        return true;
+    }
+    item_start = p + 1;
+  }
+  return false;
 }
 
 static bool has_type_declaration(const char *src, size_t len, const char *name) {
   size_t n = strlen(name);
   for (size_t i = 0; i + n < len; i++) {
+    if (src[i] != 't' && src[i] != 'i') continue;
     if ((skim_word_at(src, len, i, "type") || skim_word_at(src, len, i, "interface"))) {
       size_t j = skim_skip_ws_comments(src, len, i + (src[i] == 't' ? 4 : 9));
       if (j + n <= len && memcmp(src + j, name, n) == 0 && (j + n == len || !skim_is_id_part(src[j + n]))) return true;
@@ -328,7 +293,7 @@ static bool has_type_declaration(const char *src, size_t len, const char *name) 
 static bool has_type_only_import_declaration(const char *src, size_t len, const char *name) {
   size_t n = strlen(name);
   for (size_t i = 0; i + n < len; i++) {
-    if (!skim_word_at(src, len, i, "import")) continue;
+    if (src[i] != 'i' || !skim_word_at(src, len, i, "import")) continue;
     size_t j = skim_skip_ws_comments(src, len, i + 6);
     bool whole_import_is_type = false;
     if (skim_word_at(src, len, j, "type")) {
@@ -337,16 +302,7 @@ static bool has_type_only_import_declaration(const char *src, size_t len, const 
     }
     if (j < len && src[j] == '{') {
       size_t close = skim_skip_balanced(src, len, j, '{', '}');
-      size_t item_start = j + 1;
-      for (size_t p = j + 1; p <= close - 1; p++) {
-        if (p < close - 1 && src[p] != ',') continue;
-        bool spec_type = whole_import_is_type || specifier_is_explicit_type(src, item_start, p);
-        char *local = local_name_from_specifier(src, item_start, p);
-        bool matches = spec_type && local && strcmp(local, name) == 0;
-        free(local);
-        if (matches) return true;
-        item_start = p + 1;
-      }
+      if (specifier_list_declares(src, j, close, name, n, !whole_import_is_type)) return true;
     } else if (whole_import_is_type) {
       size_t name_start = 0, name_end = 0;
       skim_parse_identifier(src, len, j, &name_start, &name_end);
@@ -360,20 +316,13 @@ static bool has_value_declaration(const char *src, size_t len, const char *name)
   size_t n = strlen(name);
   static const char *decls[] = {"const", "let", "var", "function", "class", "enum", "namespace"};
   for (size_t i = 0; i + n < len; i++) {
+    if (!skim_char_has(src[i], SKIM_CC_DECL_START)) continue;
     if (skim_word_at(src, len, i, "import")) {
       size_t j = skim_skip_ws_comments(src, len, i + 6);
       if (skim_word_at(src, len, j, "type")) continue;
       if (j < len && src[j] == '{') {
         size_t close = skim_skip_balanced(src, len, j, '{', '}');
-        size_t item_start = j + 1;
-        for (size_t p = j + 1; p <= close - 1; p++) {
-          if (p < close - 1 && src[p] != ',') continue;
-          char *local = local_name_from_specifier(src, item_start, p);
-          bool matches = local && strcmp(local, name) == 0;
-          free(local);
-          if (matches) return true;
-          item_start = p + 1;
-        }
+        if (specifier_list_declares(src, j, close, name, n, false)) return true;
       } else {
         size_t name_start = 0, name_end = 0;
         size_t after_name = skim_parse_identifier(src, len, j, &name_start, &name_end);
@@ -383,15 +332,7 @@ static bool has_value_declaration(const char *src, size_t len, const char *name)
           size_t brace = skim_skip_ws_comments(src, len, comma + 1);
           if (brace < len && src[brace] == '{') {
             size_t close = skim_skip_balanced(src, len, brace, '{', '}');
-            size_t item_start = brace + 1;
-            for (size_t p = brace + 1; p <= close - 1; p++) {
-              if (p < close - 1 && src[p] != ',') continue;
-              char *local = local_name_from_specifier(src, item_start, p);
-              bool matches = local && strcmp(local, name) == 0;
-              free(local);
-              if (matches) return true;
-              item_start = p + 1;
-            }
+            if (specifier_list_declares(src, brace, close, name, n, false)) return true;
           }
         }
       }
@@ -414,6 +355,62 @@ typedef struct {
   bool value_use;
   bool later_decl;
 } import_binding_t;
+
+typedef struct {
+  import_binding_t *items;
+  size_t count;
+  uint64_t lengths;
+  uint32_t *slots;
+  size_t mask;
+} import_binding_set_t;
+
+static inline uint32_t binding_name_hash(const char *name, size_t len) {
+  uint64_t head = 0, tail = 0;
+  if (len >= 8) {
+    memcpy(&head, name, 8);
+    memcpy(&tail, name + len - 8, 8);
+  } else if (len >= 4) {
+    uint32_t a, b;
+    memcpy(&a, name, 4);
+    memcpy(&b, name + len - 4, 4);
+    head = a;
+    tail = b;
+  } else if (len > 0) {
+    head = (uint64_t)(unsigned char)name[0] | (uint64_t)(unsigned char)name[len / 2] << 8 |
+           (uint64_t)(unsigned char)name[len - 1] << 16;
+  }
+  uint64_t h = (head ^ 0x9e3779b97f4a7c15ull) * 0xff51afd7ed558ccdull;
+  h = (h ^ (h >> 29) ^ tail ^ len) * 0xc4ceb9fe1a85ec53ull;
+  return (uint32_t)(h ^ (h >> 32));
+}
+
+static import_binding_set_t binding_set_init(import_binding_t *items, size_t count) {
+  enum { MIN_HASHED_BINDINGS = 8 };
+  import_binding_set_t set = {.items = items, .count = count};
+  for (size_t i = 0; i < count; i++)
+    set.lengths |= 1ull << (items[i].local_len & 63);
+  if (count < MIN_HASHED_BINDINGS) return set;
+  size_t cap = 16;
+  while (cap < count * 2)
+    cap *= 2;
+  set.slots = calloc(cap, sizeof(*set.slots));
+  if (!set.slots) skim_die("out of memory");
+  set.mask = cap - 1;
+  for (size_t i = 0; i < count; i++) {
+    size_t slot = binding_name_hash(items[i].local, items[i].local_len) & set.mask;
+    while (set.slots[slot]) {
+      import_binding_t *other = &items[set.slots[slot] - 1];
+      if (other->local_len == items[i].local_len && memcmp(other->local, items[i].local, other->local_len) == 0) break;
+      slot = (slot + 1) & set.mask;
+    }
+    if (!set.slots[slot]) set.slots[slot] = (uint32_t)i + 1;
+  }
+  return set;
+}
+
+static void binding_set_free(import_binding_set_t *set) {
+  free(set->slots);
+}
 
 static void free_import_bindings(import_binding_t *bindings, size_t count) {
   for (size_t i = 0; i < count; i++)
@@ -447,76 +444,197 @@ static bool push_import_binding(
   return true;
 }
 
-static import_binding_t *
-find_import_binding(import_binding_t *bindings, size_t count, const char *name, size_t name_len) {
-  for (size_t i = 0; i < count; i++) {
-    if (bindings[i].local_len == name_len && memcmp(bindings[i].local, name, name_len) == 0) return &bindings[i];
+static inline import_binding_t *
+find_import_binding(const import_binding_set_t *set, const char *name, size_t name_len) {
+  if (!(set->lengths & (1ull << (name_len & 63)))) return NULL;
+  if (set->slots) {
+    size_t slot = binding_name_hash(name, name_len) & set->mask;
+    while (set->slots[slot]) {
+      import_binding_t *binding = &set->items[set->slots[slot] - 1];
+      if (binding->local_len == name_len && memcmp(binding->local, name, name_len) == 0) return binding;
+      slot = (slot + 1) & set->mask;
+    }
+    return NULL;
+  }
+  for (size_t i = 0; i < set->count; i++) {
+    import_binding_t *binding = &set->items[i];
+    if (binding->local_len == name_len && memcmp(binding->local, name, name_len) == 0) return binding;
   }
   return NULL;
 }
 
-static void mark_bindings_in_type_range(
+typedef enum {
+  IMPORT_USE_DECL,
+  IMPORT_USE_TYPE,
+  IMPORT_USE_OCCURRENCE,
+} import_use_kind_t;
+
+typedef enum {
+  IMPORT_POSITION_UNKNOWN,
+  IMPORT_POSITION_TYPE,
+  IMPORT_POSITION_VALUE,
+} import_position_t;
+
+typedef struct {
+  uint32_t scan_pos;
+  uint32_t prev_plus_one;
+  uint8_t kind;
+  uint8_t position;
+} import_use_t;
+
+typedef struct {
+  uint32_t name;
+  uint32_t name_len;
+  uint32_t last_use_plus_one;
+} import_ident_t;
+
+static struct {
+  const char *src;
+  size_t len;
+  size_t path_start;
+  uint64_t *on_path;
+  import_ident_t *idents;
+  size_t ident_count;
+  size_t ident_mask;
+  import_use_t *uses;
+  size_t use_count;
+  size_t use_cap;
+} import_index;
+
+void skim_ts_module_index_invalidate(void) {
+  free(import_index.on_path);
+  free(import_index.idents);
+  free(import_index.uses);
+  memset(&import_index, 0, sizeof(import_index));
+}
+
+static import_ident_t *import_index_slot(const char *src, const char *name, size_t name_len) {
+  size_t slot = binding_name_hash(name, name_len) & import_index.ident_mask;
+  for (;;) {
+    import_ident_t *ident = &import_index.idents[slot];
+    if (ident->name_len == 0) return ident;
+    if (ident->name_len == name_len && memcmp(src + ident->name, name, name_len) == 0) return ident;
+    slot = (slot + 1) & import_index.ident_mask;
+  }
+}
+
+static void import_index_grow_idents(const char *src) {
+  import_ident_t *old = import_index.idents;
+  size_t old_cap = import_index.ident_mask + 1;
+  import_index.idents = calloc(old_cap * 2, sizeof(*old));
+  if (!import_index.idents) skim_die("out of memory");
+  import_index.ident_mask = old_cap * 2 - 1;
+  for (size_t i = 0; i < old_cap; i++) {
+    if (old[i].name_len) *import_index_slot(src, src + old[i].name, old[i].name_len) = old[i];
+  }
+  free(old);
+}
+
+static void
+import_index_record(const char *src, import_use_kind_t kind, size_t scan_pos, size_t name_start, size_t name_len) {
+  if (name_len == 0) return;
+  if ((import_index.ident_count + 1) * 4 > (import_index.ident_mask + 1) * 3) import_index_grow_idents(src);
+  import_ident_t *ident = import_index_slot(src, src + name_start, name_len);
+  if (ident->name_len == 0) {
+    ident->name = (uint32_t)name_start;
+    ident->name_len = (uint32_t)name_len;
+    import_index.ident_count++;
+  }
+  if (import_index.use_count == import_index.use_cap) {
+    size_t cap = import_index.use_cap ? import_index.use_cap * 2 : 1024;
+    import_use_t *next = realloc(import_index.uses, sizeof(*next) * cap);
+    if (!next) skim_die("out of memory");
+    import_index.uses = next;
+    import_index.use_cap = cap;
+  }
+  import_index.uses[import_index.use_count++] = (import_use_t){
+    .scan_pos = (uint32_t)scan_pos,
+    .prev_plus_one = ident->last_use_plus_one,
+    .kind = (uint8_t)kind,
+  };
+  ident->last_use_plus_one = (uint32_t)import_index.use_count;
+}
+
+typedef struct {
+  const import_binding_set_t *set;
+  bool record;
+  bool stop_on_recorded_path;
+} import_scan_t;
+
+static inline void import_scan_mark(
+  const import_scan_t *scan,
   const char *src,
   size_t len,
+  import_use_kind_t kind,
+  size_t scan_pos,
+  size_t name_start,
+  size_t name_len
+) {
+  if (scan->record) {
+    import_index_record(src, kind, scan_pos, name_start, name_len);
+    return;
+  }
+  import_binding_t *binding = find_import_binding(scan->set, src + name_start, name_len);
+  if (!binding) return;
+  if (kind == IMPORT_USE_DECL) binding->later_decl = true;
+  else if (kind == IMPORT_USE_TYPE || occurrence_is_type_position(src, len, name_start)) binding->type_use = true;
+  else binding->value_use = true;
+}
+
+static void mark_bindings_in_type_range(
+  const import_scan_t *scan,
+  const char *src,
+  size_t len,
+  size_t scan_pos,
   size_t start,
-  size_t end,
-  import_binding_t *bindings,
-  size_t count
+  size_t end
 ) {
   for (size_t i = start; i < end && i < len;) {
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (skim_is_id_start(src[i])) {
       size_t ident_start = i++;
       while (i < end && i < len && skim_is_id_part(src[i]))
         i++;
-      import_binding_t *binding = find_import_binding(bindings, count, src + ident_start, i - ident_start);
-      if (binding) binding->type_use = true;
+      import_scan_mark(scan, src, len, IMPORT_USE_TYPE, scan_pos, ident_start, i - ident_start);
       continue;
     }
     i++;
   }
 }
 
-static void mark_import_binding_decl(import_binding_t *bindings, size_t count, const char *name, size_t name_len) {
-  import_binding_t *binding = find_import_binding(bindings, count, name, name_len);
-  if (binding) binding->later_decl = true;
+static void mark_import_specifier_list(
+  const import_scan_t *scan,
+  const char *src,
+  size_t len,
+  size_t scan_pos,
+  size_t brace,
+  size_t close
+) {
+  size_t item_start = brace + 1;
+  for (size_t p = brace + 1; p <= close - 1; p++) {
+    if (p < close - 1 && src[p] != ',') continue;
+    size_t a = trim_left(src, item_start, p);
+    size_t b = trim_right(src, a, p);
+    if (a < b && !specifier_is_explicit_type(src, a, b)) {
+      size_t name_start = 0, name_end = 0;
+      if (local_name_span_from_specifier(src, a, b, &name_start, &name_end))
+        import_scan_mark(scan, src, len, IMPORT_USE_DECL, scan_pos, name_start, name_end - name_start);
+    }
+    item_start = p + 1;
+  }
 }
 
-static size_t
-mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *src, size_t len, size_t i) {
+static size_t mark_import_decl_bindings(const import_scan_t *scan, const char *src, size_t len, size_t i) {
   size_t j = skim_skip_ws_comments(src, len, i + 6);
   if (skim_word_at(src, len, j, "type")) return import_statement_end(src, len, i);
 
   if (j < len && src[j] == '{') {
     size_t close = skim_skip_balanced(src, len, j, '{', '}');
-    size_t item_start = j + 1;
-    for (size_t p = j + 1; p <= close - 1; p++) {
-      if (p < close - 1 && src[p] != ',') continue;
-      size_t a = trim_left(src, len, item_start, p);
-      size_t b = trim_right(src, a, p);
-      if (a < b && !specifier_is_explicit_type(src, a, b)) {
-        char *local = local_name_from_specifier(src, a, b);
-        if (local) mark_import_binding_decl(bindings, count, local, strlen(local));
-        free(local);
-      }
-      item_start = p + 1;
-    }
+    mark_import_specifier_list(scan, src, len, i, j, close);
     return import_statement_end(src, len, i);
   }
 
@@ -525,68 +643,72 @@ mark_import_decl_bindings(import_binding_t *bindings, size_t count, const char *
     if (skim_word_at(src, len, as_pos, "as")) {
       size_t name_start = 0, name_end = 0;
       skim_parse_identifier(src, len, as_pos + 2, &name_start, &name_end);
-      if (name_start != name_end) mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+      if (name_start != name_end) {
+        import_scan_mark(scan, src, len, IMPORT_USE_DECL, i, name_start, name_end - name_start);
+      }
     }
     return import_statement_end(src, len, i);
   }
 
   size_t name_start = 0, name_end = 0;
   size_t after_name = skim_parse_identifier(src, len, j, &name_start, &name_end);
-  if (name_start != name_end) mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+  if (name_start != name_end) import_scan_mark(scan, src, len, IMPORT_USE_DECL, i, name_start, name_end - name_start);
 
   size_t comma = skim_skip_ws_comments(src, len, after_name);
   if (comma < len && src[comma] == ',') {
     size_t brace = skim_skip_ws_comments(src, len, comma + 1);
     if (brace < len && src[brace] == '{') {
       size_t close = skim_skip_balanced(src, len, brace, '{', '}');
-      size_t item_start = brace + 1;
-      for (size_t p = brace + 1; p <= close - 1; p++) {
-        if (p < close - 1 && src[p] != ',') continue;
-        size_t a = trim_left(src, len, item_start, p);
-        size_t b = trim_right(src, a, p);
-        if (a < b && !specifier_is_explicit_type(src, a, b)) {
-          char *local = local_name_from_specifier(src, a, b);
-          if (local) mark_import_binding_decl(bindings, count, local, strlen(local));
-          free(local);
-        }
-        item_start = p + 1;
-      }
+      mark_import_specifier_list(scan, src, len, i, brace, close);
       return import_statement_end(src, len, i);
     }
   }
   return import_statement_end(src, len, i);
 }
 
-static bool value_decl_keyword_at(const char *src, size_t len, size_t i, size_t *keyword_len) {
-  static const char *decls[] = {"const", "let", "var", "function", "class", "enum", "namespace"};
-  for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
-    if (skim_word_at(src, len, i, decls[d])) {
-      *keyword_len = strlen(decls[d]);
-      return true;
-    }
+static bool value_decl_keyword_at(const char *src, size_t len, size_t i, size_t ident_len, size_t *keyword_len) {
+  const char *word = NULL;
+  switch (ident_len) {
+  case 3:
+    word = src[i] == 'l' ? "let" : src[i] == 'v' ? "var" : NULL;
+    break;
+  case 4:
+    word = src[i] == 'e' ? "enum" : NULL;
+    break;
+  case 5:
+    word = src[i] == 'c' ? (src[i + 1] == 'o' ? "const" : "class") : NULL;
+    break;
+  case 8:
+    word = src[i] == 'f' ? "function" : NULL;
+    break;
+  case 9:
+    word = src[i] == 'n' ? "namespace" : NULL;
+    break;
+  default:
+    break;
   }
-  return false;
+  if (!word || !skim_word_at(src, len, i, word)) return false;
+  *keyword_len = ident_len;
+  return true;
 }
 
-static void analyze_import_bindings(const char *src, size_t len, size_t start, import_binding_t *bindings, size_t count) {
+static inline bool import_index_on_path(size_t pos) {
+  return pos >= import_index.path_start && (import_index.on_path[pos / 64] >> (pos % 64)) & 1;
+}
+
+static size_t scan_import_uses(const import_scan_t *scan, const char *src, size_t len, size_t start) {
   for (size_t i = start; i < len;) {
+    if (scan->stop_on_recorded_path && import_index_on_path(i)) return i;
+    if (scan->record) import_index.on_path[i / 64] |= 1ull << (i % 64);
+    else if (!scan->stop_on_recorded_path && !skim_char_has(src[i], SKIM_CC_ID_START | SKIM_CC_MARKER)) {
+      i++;
+      continue;
+    }
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (!skim_is_id_start(src[i])) {
       i++;
       continue;
@@ -600,15 +722,18 @@ static void analyze_import_bindings(const char *src, size_t len, size_t start, i
     size_t ident_len = ident_end - ident_start;
 
     if (ident_len == 6 && memcmp(src + ident_start, "import", 6) == 0) {
-      i = mark_import_decl_bindings(bindings, count, src, len, ident_start);
+      i = mark_import_decl_bindings(scan, src, len, ident_start);
       continue;
     }
 
-    if (ident_len == 6 && memcmp(src + ident_start, "export", 6) == 0 && statement_keyword_can_start_here(src, ident_start)) {
+    if (
+      ident_len == 6 && memcmp(src + ident_start, "export", 6) == 0 &&
+      statement_keyword_can_start_here(src, ident_start)
+    ) {
       size_t type_pos = skim_skip_ws_comments(src, len, ident_end);
       if (type_statement_keyword_at(src, len, type_pos)) {
         size_t end = export_type_statement_end(src, len, type_pos);
-        mark_bindings_in_type_range(src, len, type_pos, end, bindings, count);
+        mark_bindings_in_type_range(scan, src, len, ident_start, type_pos, end);
         i = end;
         continue;
       }
@@ -620,28 +745,85 @@ static void analyze_import_bindings(const char *src, size_t len, size_t start, i
       type_statement_keyword_at(src, len, ident_start)
     ) {
       size_t end = export_type_statement_end(src, len, ident_start);
-      mark_bindings_in_type_range(src, len, ident_start, end, bindings, count);
+      mark_bindings_in_type_range(scan, src, len, ident_start, ident_start, end);
       i = end;
       continue;
     }
 
     size_t keyword_len = 0;
-    if (value_decl_keyword_at(src, len, ident_start, &keyword_len)) {
+    if (value_decl_keyword_at(src, len, ident_start, ident_len, &keyword_len)) {
       size_t name_start = 0, name_end = 0;
       skim_parse_identifier(src, len, ident_start + keyword_len, &name_start, &name_end);
       if (name_start != name_end) {
-        mark_import_binding_decl(bindings, count, src + name_start, name_end - name_start);
+        import_scan_mark(scan, src, len, IMPORT_USE_DECL, ident_start, name_start, name_end - name_start);
         i = name_end;
         continue;
       }
     }
 
-    import_binding_t *binding = find_import_binding(bindings, count, src + ident_start, ident_len);
-    if (binding) {
-      if (occurrence_is_type_position(src, len, ident_start)) binding->type_use = true;
-      else binding->value_use = true;
+    import_scan_mark(scan, src, len, IMPORT_USE_OCCURRENCE, ident_start, ident_start, ident_len);
+  }
+  return len;
+}
+
+static void import_index_build(const char *src, size_t len, size_t start) {
+  enum { INITIAL_IDENT_SLOTS = 1024 };
+  import_index.path_start = start;
+  import_index.on_path = calloc(len / 64 + 1, sizeof(*import_index.on_path));
+  import_index.idents = calloc(INITIAL_IDENT_SLOTS, sizeof(*import_index.idents));
+  if (!import_index.on_path || !import_index.idents) skim_die("out of memory");
+  import_index.ident_mask = INITIAL_IDENT_SLOTS - 1;
+  import_scan_t scan = {.record = true};
+  scan_import_uses(&scan, src, len, start);
+}
+
+static void apply_recorded_import_uses(const import_binding_set_t *set, const char *src, size_t len, size_t join_pos) {
+  for (size_t b = 0; b < set->count; b++) {
+    import_binding_t *binding = &set->items[b];
+    if (find_import_binding(set, binding->local, binding->local_len) != binding) continue;
+    const import_ident_t *ident = import_index_slot(src, binding->local, binding->local_len);
+    for (uint32_t use_id = ident->last_use_plus_one; use_id;) {
+      import_use_t *use = &import_index.uses[use_id - 1];
+      if (use->scan_pos < join_pos) break;
+      if (use->kind == IMPORT_USE_DECL) binding->later_decl = true;
+      else if (use->kind == IMPORT_USE_TYPE) binding->type_use = true;
+      else {
+        if (use->position == IMPORT_POSITION_UNKNOWN) {
+          bool is_type = occurrence_is_type_position(src, len, use->scan_pos);
+          use->position = is_type ? IMPORT_POSITION_TYPE : IMPORT_POSITION_VALUE;
+        }
+        if (use->position == IMPORT_POSITION_TYPE) binding->type_use = true;
+        else binding->value_use = true;
+      }
+      use_id = use->prev_plus_one;
     }
   }
+}
+
+static void
+analyze_import_bindings(const char *src, size_t len, size_t start, import_binding_t *bindings, size_t count) {
+  import_binding_set_t binding_set = binding_set_init(bindings, count);
+  import_scan_t scan = {.set = &binding_set};
+  bool indexable = skim_scan_cache_owns(src) && len <= UINT32_MAX;
+  if (!indexable) {
+    scan_import_uses(&scan, src, len, start);
+  } else {
+    bool first_query = import_index.src != src || import_index.len != len;
+    if (first_query) {
+      skim_ts_module_index_invalidate();
+      import_index.src = src;
+      import_index.len = len;
+    }
+    if (first_query && !skim_word_at(src, len, skim_skip_ws_comments(src, len, start), "import")) {
+      scan_import_uses(&scan, src, len, start);
+    } else {
+      if (!import_index.on_path) import_index_build(src, len, start);
+      scan.stop_on_recorded_path = true;
+      size_t join_pos = scan_import_uses(&scan, src, len, start);
+      if (join_pos < len) apply_recorded_import_uses(&binding_set, src, len, join_pos);
+    }
+  }
+  binding_set_free(&binding_set);
 }
 
 static bool import_binding_should_keep(const import_binding_t *binding, const char *src, size_t import_pos) {
@@ -661,7 +843,6 @@ static bool import_local_should_keep(const char *src, size_t len, size_t start, 
 }
 
 static bool try_export_named(skim_str_t *out, const char *src, size_t len, size_t i, size_t brace, size_t *out_end) {
-  (void)i;
   size_t close = skim_skip_balanced(src, len, brace, '{', '}');
   if (close <= brace + 1 || close > len) return false;
   size_t after = skim_skip_ws_comments(src, len, close);
@@ -698,7 +879,7 @@ static bool try_export_named(skim_str_t *out, const char *src, size_t len, size_
   size_t specifier_count = 0;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
-    size_t a = trim_left(src, len, item_start, p);
+    size_t a = trim_left(src, item_start, p);
     size_t b = trim_right(src, a, p);
     if (a < b) specifier_count++;
     if (a < b && !specifier_is_explicit_type(src, a, b)) {
@@ -818,13 +999,10 @@ static size_t export_type_statement_end(const char *src, size_t len, size_t i) {
       continue;
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
+      i = skim_skip_block_comment(src, len, i + 2);
       continue;
     }
-    if (isspace((unsigned char)c)) {
+    if (skim_is_space(c)) {
       i++;
       continue;
     }
@@ -894,19 +1072,7 @@ static bool identifier_occurs_in_range(const char *src, size_t len, size_t start
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (
       memcmp(src + i, name, n) == 0 && (i == 0 || !skim_is_id_part(src[i - 1])) &&
       (i + n == len || !skim_is_id_part(src[i + n]))
@@ -932,19 +1098,7 @@ static bool identifier_has_external_value_use(
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (
       memcmp(src + i, name, n) == 0 && (i == 0 || !skim_is_id_part(src[i - 1])) &&
       (i + n == len || !skim_is_id_part(src[i + n]))
@@ -971,19 +1125,7 @@ static import_equals_decl_t *collect_import_equals_decls(const char *src, size_t
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (!skim_word_at(src, len, i, "import")) {
       i++;
       continue;
@@ -1048,13 +1190,14 @@ static bool import_equals_is_live(const char *src, size_t len, const char *name)
   return live;
 }
 
-static bool try_named_import(skim_str_t *out, const char *src, size_t len, size_t i, size_t brace) {
+static bool try_named_import(skim_str_t *out, const char *src, size_t len, size_t i, size_t brace, size_t *end_out) {
   size_t close = skim_skip_balanced(src, len, brace, '{', '}');
   if (close <= brace || close > len) return false;
   size_t after = skim_skip_ws_comments(src, len, close);
   if (!skim_word_at(src, len, after, "from")) return false;
   size_t module_start = skim_skip_ws_comments(src, len, after + 4);
   size_t end = import_statement_end(src, len, i);
+  *end_out = end;
   size_t module_end = end;
   if (module_end > module_start && src[module_end - 1] == ';') module_end--;
 
@@ -1072,7 +1215,7 @@ static bool try_named_import(skim_str_t *out, const char *src, size_t len, size_
   size_t item_start = brace + 1;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
-    size_t a = trim_left(src, len, item_start, p);
+    size_t a = trim_left(src, item_start, p);
     size_t b = trim_right(src, a, p);
     if (a < b && !specifier_is_explicit_type(src, a, b)) {
       push_import_binding(&bindings, &binding_count, &binding_cap, local_name_from_specifier(src, a, b), a, b);
@@ -1111,7 +1254,8 @@ static bool try_default_named_import(
   size_t i,
   size_t default_start,
   size_t default_end,
-  size_t brace
+  size_t brace,
+  size_t *end_out
 ) {
   size_t close = skim_skip_balanced(src, len, brace, '{', '}');
   if (close <= brace + 1 || close > len) return false;
@@ -1119,6 +1263,7 @@ static bool try_default_named_import(
   if (!skim_word_at(src, len, after, "from")) return false;
   size_t module_start = skim_skip_ws_comments(src, len, after + 4);
   size_t end = import_statement_end(src, len, i);
+  *end_out = end;
   size_t module_end = end;
   if (module_end > module_start && src[module_end - 1] == ';') module_end--;
 
@@ -1131,7 +1276,7 @@ static bool try_default_named_import(
   size_t item_start = brace + 1;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
-    size_t a = trim_left(src, len, item_start, p);
+    size_t a = trim_left(src, item_start, p);
     size_t b = trim_right(src, a, p);
     if (a < b && !specifier_is_explicit_type(src, a, b)) {
       push_import_binding(&bindings, &binding_count, &binding_cap, local_name_from_specifier(src, a, b), a, b);
@@ -1220,9 +1365,7 @@ try_namespace_import_statement(skim_str_t *out, const char *src, size_t len, siz
 
 static bool try_named_import_statement(skim_str_t *out, const char *src, size_t len, size_t i, size_t j, size_t *io) {
   if (j >= len || src[j] != '{') return false;
-  if (!try_named_import(out, src, len, i, j)) return false;
-  *io = import_statement_end(src, len, i);
-  return true;
+  return try_named_import(out, src, len, i, j, io);
 }
 
 static bool try_default_named_import_statement(
@@ -1238,9 +1381,7 @@ static bool try_default_named_import_statement(
   if (name_start == name_end || eq >= len || src[eq] != ',') return false;
   size_t brace = skim_skip_ws_comments(src, len, eq + 1);
   if (brace >= len || src[brace] != '{') return false;
-  if (!try_default_named_import(out, src, len, i, name_start, name_end, brace)) return false;
-  *io = import_statement_end(src, len, i);
-  return true;
+  return try_default_named_import(out, src, len, i, name_start, name_end, brace, io);
 }
 
 static bool try_import_equals_statement(

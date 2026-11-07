@@ -1,6 +1,4 @@
 const { spawnSync } = require('child_process');
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { existingDir, existingFile, requireSkimBin, resolveOxcEmit, resolveOxcRoot, resolveTypeScriptRoot, root, skip } = require('./support.cjs');
 
@@ -39,7 +37,6 @@ function run(cmd, args, opts = {}) {
   return result;
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skim-bench-'));
 const cBin = requireSkimBin();
 
 function bench(bin, file) {

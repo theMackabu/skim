@@ -8,6 +8,14 @@ meson compile -C build
 meson test -C build
 ```
 
+to measure the transform itself, without process startup:
+
+```sh
+meson compile -C build skim_bench
+build/skim_bench 20 path/to/file.ts
+SKIM_BENCH_PER_FILE=1 build/skim_bench 5 src/*.ts
+```
+
 library users include `skim.h` and call `skim_strip_typescript_owned`. the
 returned buffer is owned by the caller and must be released with `skim_free`.
 

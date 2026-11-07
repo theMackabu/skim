@@ -1,6 +1,5 @@
 #include "skim_internal.h"
 
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +58,7 @@ static size_t skip_class_type_tail(const char *src, size_t len, size_t i) {
   while (i < len) {
     char c = src[i];
     if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token) break;
-    if (isspace((unsigned char)c)) {
+    if (skim_is_space(c)) {
       i++;
       continue;
     }
@@ -76,10 +75,7 @@ static size_t skip_class_type_tail(const char *src, size_t len, size_t i) {
       continue;
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
+      i = skim_skip_block_comment(src, len, i + 2);
       continue;
     }
     if (c == '(') paren++;
@@ -130,10 +126,7 @@ static size_t skip_class_index_signature_tail(const char *src, size_t len, size_
       continue;
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
+      i = skim_skip_block_comment(src, len, i + 2);
       continue;
     }
     if (c == '(') paren++;
@@ -145,7 +138,7 @@ static size_t skip_class_index_signature_tail(const char *src, size_t len, size_
     else if (c == '<') angle++;
     else if (c == '>' && angle > 0) angle--;
     else if (c == ';' && paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i + 1;
-    if (!isspace((unsigned char)c)) seen_type_token = true;
+    if (!skim_is_space(c)) seen_type_token = true;
     i++;
   }
   return i;
@@ -156,8 +149,8 @@ static size_t skip_class_member_name(const char *src, size_t len, size_t i) {
   if (i >= len) return i;
   if (src[i] == '[') return skim_skip_balanced(src, len, i, '[', ']');
   if (src[i] == '\'' || src[i] == '"' || src[i] == '`') return skim_skip_string_raw(src, len, i);
-  if (isdigit((unsigned char)src[i])) {
-    while (i < len && (isdigit((unsigned char)src[i]) || src[i] == '.'))
+  if (skim_is_digit(src[i])) {
+    while (i < len && (skim_is_digit(src[i]) || src[i] == '.'))
       i++;
     return i;
   }
@@ -198,17 +191,14 @@ static bool bracket_contains_type_colon(const char *src, size_t len, size_t i) {
   return false;
 }
 
-static bool range_has_newline(const char *src, size_t start, size_t end) {
-  for (size_t i = start; i < end; i++) {
-    if (src[i] == '\n' || src[i] == '\r') return true;
-  }
-  return false;
-}
-
 static size_t skip_class_angle_type_list(const char *src, size_t len, size_t i) {
   int depth = 0;
   int paren = 0, bracket = 0, brace = 0;
   while (i < len) {
+    if (!skim_char_has(src[i], SKIM_CC_ANGLE)) {
+      i++;
+      continue;
+    }
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
       i = skim_skip_string_raw(src, len, i);
       continue;
@@ -251,7 +241,7 @@ static size_t skip_decorator_line(const char *src, size_t len, size_t i) {
 
   for (;;) {
     size_t j = skim_skip_ws(src, len, i);
-    if (range_has_newline(src, i, j)) break;
+    if (skim_range_has_newline(src, i, j)) break;
     if (j >= len) break;
     if (src[j] == '<') {
       i = skip_class_angle_type_list(src, len, j);
@@ -318,7 +308,7 @@ static bool class_modifier_word_used_as_field_name(const char *src, size_t len, 
     if (!skim_word_at(src, len, i, words[w])) continue;
     size_t j = i + strlen(words[w]);
     bool saw_newline = false;
-    while (j < end && isspace((unsigned char)src[j])) {
+    while (j < end && skim_is_space(src[j])) {
       saw_newline = saw_newline || src[j] == '\n' || src[j] == '\r';
       j++;
     }
@@ -354,7 +344,7 @@ static bool class_keyword_used_as_field_name(const char *src, size_t len, size_t
 
 static char out_prev_non_ws(const skim_str_t *out) {
   size_t i = out->len;
-  while (i > 0 && isspace((unsigned char)out->data[i - 1]))
+  while (i > 0 && skim_is_space(out->data[i - 1]))
     i--;
   return i > 0 ? out->data[i - 1] : '\0';
 }
@@ -369,274 +359,12 @@ static bool class_prev_needs_member_separator(const skim_str_t *out) {
   return prev != '\0' && prev != '{' && prev != '}' && prev != ';';
 }
 
-static bool decimal_number_literal_at(const char *src, size_t len, size_t i) {
-  if (i >= len || !isdigit((unsigned char)src[i])) return false;
-  if (i > 0 && (skim_is_id_part(src[i - 1]) || src[i - 1] == '.')) return false;
-  return true;
-}
-
-static size_t count_digits_stripped(const char *src, size_t start, size_t end) {
-  size_t count = 0;
-  for (size_t i = start; i < end; i++) {
-    if (isdigit((unsigned char)src[i])) count++;
-  }
-  return count;
-}
-
-static void put_digits_stripped(skim_str_t *out, const char *src, size_t start, size_t end) {
-  for (size_t i = start; i < end; i++) {
-    if (isdigit((unsigned char)src[i])) skim_str_putc(out, src[i]);
-  }
-}
-
-static void put_n_digits_stripped(skim_str_t *out, const char *src, size_t start, size_t end, size_t n) {
-  for (size_t i = start; i < end && n > 0; i++) {
-    if (isdigit((unsigned char)src[i])) {
-      skim_str_putc(out, src[i]);
-      n--;
-    }
-  }
-}
-
-static size_t trailing_zero_digits_stripped(const char *src, size_t start, size_t end) {
-  size_t count = 0;
-  for (size_t i = end; i > start;) {
-    i--;
-    if (src[i] == '_') continue;
-    if (src[i] != '0') break;
-    count++;
-  }
-  return count;
-}
-
-static bool stripped_int_is_zero(const char *src, size_t start, size_t end) {
-  bool saw_digit = false;
-  for (size_t i = start; i < end; i++) {
-    if (!isdigit((unsigned char)src[i])) continue;
-    saw_digit = true;
-    if (src[i] != '0') return false;
-  }
-  return saw_digit;
-}
-
-static bool stripped_digits_all_zero(const char *src, size_t start, size_t end) {
-  for (size_t i = start; i < end; i++) {
-    if (isdigit((unsigned char)src[i]) && src[i] != '0') return false;
-  }
-  return true;
-}
-
-static long long parse_exponent_digits(const char *src, size_t start, size_t end, bool negative) {
-  long long value = 0;
-  for (size_t i = start; i < end; i++) {
-    if (!isdigit((unsigned char)src[i])) continue;
-    if (value < 1000000000ll) value = value * 10 + (long long)(src[i] - '0');
-  }
-  return negative ? -value : value;
-}
-
-static void put_js_scientific_number(skim_str_t *out, long double value) {
-  char buf[128];
-  snprintf(buf, sizeof(buf), "%.15Le", value);
-  char digits[32];
-  size_t digit_count = 0;
-  size_t e = 0;
-  for (; buf[e] && buf[e] != 'e' && buf[e] != 'E'; e++) {
-    if (isdigit((unsigned char)buf[e])) digits[digit_count++] = buf[e];
-  }
-  while (digit_count > 1 && digits[digit_count - 1] == '0')
-    digit_count--;
-  int exp_value = 0;
-  int exp_sign = 1;
-  if (buf[e]) {
-    e++;
-    if (buf[e] == '+') e++;
-    else if (buf[e] == '-') {
-      exp_sign = -1;
-      e++;
-    }
-    while (buf[e]) {
-      if (isdigit((unsigned char)buf[e])) exp_value = exp_value * 10 + (buf[e] - '0');
-      e++;
-    }
-  }
-  int compact_exp = exp_sign * exp_value - (int)(digit_count - 1);
-  for (size_t k = 0; k < digit_count; k++)
-    skim_str_putc(out, digits[k]);
-  if (compact_exp != 0) {
-    char exp_buf[32];
-    snprintf(exp_buf, sizeof(exp_buf), "e%d", compact_exp);
-    skim_str_puts(out, exp_buf);
-  }
-}
-
-static size_t copy_decimal_number_literal(skim_str_t *out, const char *src, size_t len, size_t i) {
-  size_t j = i;
-  while (j < len && (isdigit((unsigned char)src[j]) || src[j] == '_'))
-    j++;
-  size_t int_end = j;
-  if (j < len && src[j] == 'n') {
-    put_digits_stripped(out, src, i, j);
-    skim_str_putc(out, 'n');
-    return j + 1;
-  }
-
-  bool has_fraction = false;
-  size_t frac_start = j;
-  size_t frac_end = j;
-  if (j < len && src[j] == '.' && !(j + 1 < len && src[j + 1] == '.')) {
-    has_fraction = true;
-    frac_start = j + 1;
-    frac_end = frac_start;
-    while (frac_end < len && (isdigit((unsigned char)src[frac_end]) || src[frac_end] == '_'))
-      frac_end++;
-    j = frac_end;
-  }
-
-  bool has_exp = false;
-  bool exp_negative = false;
-  size_t exp_start = j;
-  size_t exp_end = j;
-  if (j < len && (src[j] == 'e' || src[j] == 'E')) {
-    size_t exp = j + 1;
-    if (exp < len && (src[exp] == '+' || src[exp] == '-')) {
-      exp_negative = src[exp] == '-';
-      exp++;
-    }
-    exp_start = exp;
-    while (exp < len && (isdigit((unsigned char)src[exp]) || src[exp] == '_'))
-      exp++;
-    if (count_digits_stripped(src, exp_start, exp) > 0) {
-      has_exp = true;
-      exp_end = exp;
-      j = exp;
-    }
-  }
-
-  if (has_fraction || has_exp) {
-    size_t frac_digits = count_digits_stripped(src, frac_start, frac_end);
-    if (has_exp) {
-      long long exponent = parse_exponent_digits(src, exp_start, exp_end, exp_negative);
-      exponent -= (long long)frac_digits;
-      size_t int_digits = count_digits_stripped(src, i, int_end);
-      if (
-        !has_fraction && exponent > 0 && exponent <= 8 &&
-        int_digits + (size_t)exponent < int_digits + 2 + count_digits_stripped(src, exp_start, exp_end)
-      ) {
-        put_digits_stripped(out, src, i, int_end);
-        for (long long z = 0; z < exponent; z++)
-          skim_str_putc(out, '0');
-        return j;
-      }
-      put_digits_stripped(out, src, i, has_fraction ? frac_end : int_end);
-      if (exponent != 0) {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "e%lld", exponent);
-        skim_str_puts(out, buf);
-      }
-      return j;
-    }
-    if (stripped_digits_all_zero(src, frac_start, frac_end)) {
-      put_digits_stripped(out, src, i, frac_start - 1);
-      return j;
-    }
-    if (stripped_int_is_zero(src, i, frac_start - 1) && frac_digits > 0) {
-      skim_str_putc(out, '.');
-      put_digits_stripped(out, src, frac_start, frac_end);
-    } else {
-      put_digits_stripped(out, src, i, frac_start - 1);
-      skim_str_putc(out, '.');
-      put_digits_stripped(out, src, frac_start, frac_end);
-    }
-    return j;
-  }
-
-  size_t int_len = count_digits_stripped(src, i, j);
-  size_t exponent = trailing_zero_digits_stripped(src, i, j);
-  if (exponent > 0 && exponent < int_len) {
-    size_t mantissa_len = int_len - exponent;
-    size_t exp_digits = 1;
-    for (size_t n = exponent; n >= 10; n /= 10)
-      exp_digits++;
-    if (mantissa_len + 1 + exp_digits < int_len) {
-      put_n_digits_stripped(out, src, i, j, mantissa_len);
-      skim_str_putc(out, 'e');
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%zu", exponent);
-      skim_str_puts(out, buf);
-      return j;
-    }
-  }
-  put_digits_stripped(out, src, i, j);
-  return j;
-}
-
-static bool based_number_literal_at(const char *src, size_t len, size_t i) {
-  if (i + 2 >= len || src[i] != '0') return false;
-  if (i > 0 && (skim_is_id_part(src[i - 1]) || src[i - 1] == '.')) return false;
-  return src[i + 1] == 'b' || src[i + 1] == 'B' || src[i + 1] == 'o' || src[i + 1] == 'O' || src[i + 1] == 'x' ||
-         src[i + 1] == 'X';
-}
-
-static size_t copy_based_number_literal(skim_str_t *out, const char *src, size_t len, size_t i) {
-  int base = (src[i + 1] == 'b' || src[i + 1] == 'B') ? 2 : (src[i + 1] == 'o' || src[i + 1] == 'O') ? 8 : 16;
-  size_t j = i + 2;
-  unsigned long long value = 0;
-  long double approx = 0.0L;
-  bool ok = true;
-  bool saw_digit = false;
-  for (; j < len; j++) {
-    if (src[j] == '_') continue;
-    int digit = -1;
-    if (src[j] >= '0' && src[j] <= '9') digit = src[j] - '0';
-    else if (src[j] >= 'a' && src[j] <= 'f') digit = src[j] - 'a' + 10;
-    else if (src[j] >= 'A' && src[j] <= 'F') digit = src[j] - 'A' + 10;
-    else break;
-    if (digit >= base) break;
-    saw_digit = true;
-    approx = approx * (long double)base + (long double)digit;
-    if (value > (~0ull - (unsigned long long)digit) / (unsigned long long)base) ok = false;
-    if (ok) value = value * (unsigned long long)base + (unsigned long long)digit;
-  }
-  bool bigint = j < len && src[j] == 'n';
-  if (!saw_digit) {
-    skim_str_putn(out, src + i, j - i);
-    if (bigint) {
-      skim_str_putc(out, 'n');
-      j++;
-    }
-    return j;
-  }
-  if (!ok) {
-    if (bigint) {
-      skim_str_putn(out, src + i, j + 1 - i);
-      return j + 1;
-    }
-    if (approx > 1.7976931348623157e308L) {
-      size_t next = skim_skip_ws(src, len, j);
-      if (next < len && src[next] == ':') skim_str_puts(out, "[Infinity]");
-      else skim_str_puts(out, "Infinity");
-    } else {
-      put_js_scientific_number(out, approx);
-    }
-    return j;
-  }
-  char buf[32];
-  snprintf(buf, sizeof(buf), "%llu", value);
-  skim_str_puts(out, buf);
-  if (bigint) {
-    skim_str_putc(out, 'n');
-    j++;
-  }
-  return j;
-}
-
 static bool next_looks_like_class_member(const char *src, size_t len, size_t i, size_t end) {
   i = skim_skip_ws_comments(src, len, i);
   if (i >= end) return false;
   if (
     src[i] == '@' || src[i] == '[' || src[i] == '#' || src[i] == '*' || src[i] == '\'' || src[i] == '"' ||
-    src[i] == '`' || isdigit((unsigned char)src[i])
+    src[i] == '`' || skim_is_digit(src[i])
   )
     return true;
   if (!skim_is_id_start(src[i])) return false;
@@ -694,7 +422,7 @@ static void emit_preserved_class_member_prefix(
     emit_decorator_range(out, src, len, start, decorators_end);
     leading = decorators_end;
   }
-  while (leading < member_prefix_start && isspace((unsigned char)src[leading])) {
+  while (leading < member_prefix_start && skim_is_space(src[leading])) {
     skim_str_putc(out, src[leading++]);
   }
   if (saw_static) skim_str_puts(out, "static ");
@@ -872,7 +600,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
       *io = j + 1;
       return true;
     }
-    if (j < end && src[j] != '{' && range_has_newline(src, after_params, j)) {
+    if (j < end && src[j] != '{' && skim_range_has_newline(src, after_params, j)) {
       skim_emit_preserved_newlines(out, src, i, j);
       *io = j;
       return true;
@@ -882,7 +610,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
       );
       size_t prefix_end = member_name_end;
-      while (prefix_end > member_prefix_start && isspace((unsigned char)src[prefix_end - 1]))
+      while (prefix_end > member_prefix_start && skim_is_space(src[prefix_end - 1]))
         prefix_end--;
       if (prefix_end > member_prefix_start && (src[prefix_end - 1] == '?' || src[prefix_end - 1] == '!')) prefix_end--;
       bool has_computed_name = false;
@@ -955,7 +683,7 @@ try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_
         *io = j + 1;
         return true;
       }
-      if (type_end < end && ((src[type_end] == '\n' || src[type_end] == '\r') || range_has_newline(src, type_end, j))) {
+      if (type_end < end && ((src[type_end] == '\n' || src[type_end] == '\r') || skim_range_has_newline(src, type_end, j))) {
         if (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) {
           skim_emit_preserved_newlines(out, src, i, type_end);
           *io = type_end;
@@ -1053,8 +781,8 @@ static bool try_remove_literal_named_class_type_member(
   size_t name_end = i;
   if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
     name_end = skim_skip_string_raw(src, len, i);
-  } else if (isdigit((unsigned char)src[i])) {
-    while (name_end < end && (isdigit((unsigned char)src[name_end]) || src[name_end] == '.'))
+  } else if (skim_is_digit(src[i])) {
+    while (name_end < end && (skim_is_digit(src[name_end]) || src[name_end] == '.'))
       name_end++;
   } else {
     return false;
@@ -1080,7 +808,7 @@ static bool try_remove_literal_named_class_type_member(
     return true;
   }
   if (
-    type_end < end && ((src[type_end] == '\n' || src[type_end] == '\r') || range_has_newline(src, type_end, after_type))
+    type_end < end && ((src[type_end] == '\n' || src[type_end] == '\r') || skim_range_has_newline(src, type_end, after_type))
   ) {
     skim_transform_range(src, len, i, colon, out);
     skim_str_putc(out, ';');
@@ -1093,12 +821,12 @@ static bool try_remove_literal_named_class_type_member(
 static bool
 copy_class_body_common_token(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io, bool allow_ts) {
   size_t i = *io;
-  if (based_number_literal_at(src, len, i)) {
-    *io = copy_based_number_literal(out, src, len, i);
+  if (skim_based_number_literal_at(src, len, i)) {
+    *io = skim_copy_based_number_literal(out, src, len, i, false);
     return true;
   }
-  if (decimal_number_literal_at(src, len, i)) {
-    *io = copy_decimal_number_literal(out, src, len, i);
+  if (skim_decimal_number_literal_at(src, len, i)) {
+    *io = skim_copy_decimal_number_literal(out, src, len, i, false);
     return true;
   }
   if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
@@ -1118,40 +846,27 @@ copy_class_body_common_token(skim_str_t *out, const char *src, size_t len, size_
     skim_str_putn(out, src + i, *io - i);
     return true;
   }
-  if (allow_ts && src[i] != '@' && skim_transform_try_at(out, src, len, io)) return true;
-  return false;
+  return allow_ts && src[i] != '@' && skim_transform_try_at(out, src, len, io);
 }
 
-static bool
+static void
 copy_nested_class_body_token(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io, int *depth) {
   size_t i = *io;
-  if (copy_class_body_common_token(out, src, len, end, io, true)) return true;
-  if (src[i] == '{') {
-    (*depth)++;
-    skim_str_putc(out, src[i]);
-    *io = i + 1;
-    return true;
-  }
-  if (src[i] == '}') {
-    (*depth)--;
-    skim_str_putc(out, src[i]);
-    *io = i + 1;
-    return true;
-  }
-  if (skim_emit_copy_plain_identifier(out, src, end, io)) return true;
-  if (skim_emit_copy_plain_span(out, src, end, io)) return true;
+  if (copy_class_body_common_token(out, src, len, end, io, true)) return;
+  if (src[i] == '{') (*depth)++;
+  else if (src[i] == '}') (*depth)--;
+  else if (skim_emit_copy_plain_identifier(out, src, end, io) || skim_emit_copy_plain_span(out, src, end, io)) return;
   skim_str_putc(out, src[i]);
   *io = i + 1;
-  return true;
 }
 
 static bool copy_class_top_level_space(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io) {
   size_t i = *io;
-  if (!isspace((unsigned char)src[i])) return false;
+  if (!skim_is_space(src[i])) return false;
 
   size_t j = i;
   bool has_newline = false;
-  while (j < end && isspace((unsigned char)src[j])) {
+  while (j < end && skim_is_space(src[j])) {
     has_newline = has_newline || src[j] == '\n' || src[j] == '\r';
     j++;
   }
@@ -1232,8 +947,6 @@ static void transform_class_body_range(const char *src, size_t len, size_t start
     if (src[i] == '(') paren_depth++;
     else if (src[i] == '[') bracket_depth++;
     if (src[i] == '{') depth++;
-    if (depth > 0 && skim_emit_copy_plain_identifier(out, src, end, &i)) continue;
-    if (depth > 0 && skim_emit_copy_plain_span(out, src, end, &i)) continue;
     skim_str_putc(out, src[i++]);
   }
 }
@@ -1297,26 +1010,14 @@ static void emit_normal_class(
 }
 
 static size_t find_class_body_open(const char *src, size_t len, size_t i) {
-  int paren = 0, bracket = 0, angle = 0;
+  int paren = 0, bracket = 0;
   while (i < len) {
     char c = src[i];
     if (c == '\'' || c == '"' || c == '`') {
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (c == '(') paren++;
     else if (c == ')' && paren > 0) paren--;
     else if (c == '[') bracket++;
@@ -1324,14 +1025,13 @@ static size_t find_class_body_open(const char *src, size_t len, size_t i) {
     else if (c == '<') {
       i = skip_class_angle_type_list(src, len, i);
       continue;
-    } else if (c == '>' && angle > 0) angle--;
-    else if (c == '{' && paren == 0 && bracket == 0 && angle == 0) return i;
+    } else if (c == '{' && paren == 0 && bracket == 0) return i;
     i++;
   }
   return i;
 }
 
-static size_t
+static void
 split_params(const char *src, size_t len, size_t start, size_t end, param_t **out_params, size_t *out_count) {
   param_t *params = NULL;
   size_t count = 0;
@@ -1388,11 +1088,11 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
         size_t init = b;
         if (colon < b && src[colon] == ':') {
           init = colon + 1;
-          int angle = 0;
+          int init_angle = 0;
           while (init < b) {
-            if (src[init] == '<') angle++;
-            else if (src[init] == '>' && angle > 0) angle--;
-            else if (src[init] == '=' && angle == 0) {
+            if (src[init] == '<') init_angle++;
+            else if (src[init] == '>' && init_angle > 0) init_angle--;
+            else if (src[init] == '=' && init_angle == 0) {
               if (init + 1 < b && src[init + 1] == '>') {
                 init += 2;
                 continue;
@@ -1428,7 +1128,6 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
   }
   *out_params = params;
   *out_count = count;
-  return end;
 }
 
 static void free_params(param_t *params, size_t count) {
@@ -1540,14 +1239,17 @@ bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io)
   size_t ctor_member_start = 0;
   bool found = false;
   while (ctor < body_close) {
-    size_t next = skim_skip_ws_comments(src, body_close, ctor);
-    if (next != ctor) {
-      ctor = next;
-      continue;
-    }
-    if (src[ctor] == '/' && skim_slash_starts_regex(src, body_open, ctor)) {
-      ctor = skim_skip_regex_literal(src, body_close, ctor);
-      continue;
+    char ctor_char = src[ctor];
+    if (skim_is_space(ctor_char) || ctor_char == '/') {
+      size_t next = skim_skip_ws_comments(src, body_close, ctor);
+      if (next != ctor) {
+        ctor = next;
+        continue;
+      }
+      if (ctor_char == '/' && skim_slash_starts_regex(src, body_open, ctor)) {
+        ctor = skim_skip_regex_literal(src, body_close, ctor);
+        continue;
+      }
     }
     if (src[ctor] == '\'' || src[ctor] == '"' || src[ctor] == '`') {
       ctor = skim_skip_string_raw(src, len, ctor);

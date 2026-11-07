@@ -45,6 +45,52 @@ assert_strip_ok(const char *path, const char *out, size_t out_len, skim_error_t 
   }
 }
 
+static char *duplicate(const char *source) {
+  size_t size = strlen(source) + 1;
+  char *copy = malloc(size);
+  if (!copy) exit(1);
+  memcpy(copy, source, size);
+  return copy;
+}
+
+static bool check_buffer_reuse(skim_context_t *ctx, const char *first, const char *second) {
+  size_t len = strlen(first);
+  if (strlen(second) != len) {
+    fprintf(stderr, "buffer reuse pair must have equal lengths\n");
+    exit(1);
+  }
+
+  const char *sources[] = {first, second};
+  char *copies[] = {duplicate(first), duplicate(second)};
+  char *shared = duplicate(first);
+  char *expected[2] = {NULL, NULL};
+  size_t expected_len[2] = {0, 0};
+  skim_error_t error = SKIM_OK;
+  for (size_t i = 0; i < 2; i++) {
+    expected[i] = skim_strip_typescript_owned(
+      copies[i], len, "reuse.ts", SKIM_SOURCE_AUTO, NULL, &expected_len[i], &error, NULL, 0
+    );
+    if (!expected[i]) exit(1);
+  }
+
+  bool same = true;
+  for (size_t i = 0; i < 2; i++) {
+    memcpy(shared, sources[i], len + 1);
+    size_t out_len = 0;
+    skim_context_reset(ctx);
+    const char *out =
+      skim_strip_typescript_borrowed(ctx, shared, len, "reuse.ts", SKIM_SOURCE_AUTO, NULL, &out_len, &error, NULL, 0);
+    same = same && out && out_len == expected_len[i] && memcmp(out, expected[i], out_len) == 0;
+  }
+
+  for (size_t i = 0; i < 2; i++) {
+    skim_free(expected[i]);
+    free(copies[i]);
+  }
+  free(shared);
+  return same;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     fprintf(stderr, "usage: %s <fixture.ts>...\n", argv[0]);
@@ -145,6 +191,21 @@ int main(int argc, char **argv) {
     return 1;
   }
   skim_free(owned);
+
+  const char *reuse_pairs[][2] = {
+    {";{ enum E { A = 1 } }\n", ";  enum E { A = 1 }  \n"},
+    {"var o = {   a: 1, b: 2; }\n", "xyz w ) { q?a: 1, b: 2; }\n"},
+    {"{ var N; }\nnamespace N { export const x = 1; }\n", "{ vaq N; }\nnamespace N { export const x = 1; }\n"},
+    {"import {a} from 'x';\nimport {b} from 'y';\nvar q=a ;var r=b ;\n",
+     "import {a} from 'x';\nimport {b} from 'y';\nvar q:a ;var r:b ;\n"},
+  };
+  for (size_t pair = 0; pair < sizeof(reuse_pairs) / sizeof(reuse_pairs[0]); pair++) {
+    if (!check_buffer_reuse(&ctx, reuse_pairs[pair][0], reuse_pairs[pair][1])) {
+      fprintf(stderr, "buffer reuse pair %zu: output depends on the previous source\n", pair);
+      skim_context_deinit(&ctx);
+      return 1;
+    }
+  }
 
   skim_context_deinit(&ctx);
   puts("skim context reuse passed");

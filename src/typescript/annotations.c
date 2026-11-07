@@ -1,15 +1,5 @@
 #include "skim_internal.h"
 
-#include <ctype.h>
-#include <string.h>
-
-static bool range_has_newline(const char *src, size_t start, size_t end) {
-  for (size_t i = start; i < end; i++) {
-    if (src[i] == '\n' || src[i] == '\r') return true;
-  }
-  return false;
-}
-
 static size_t skip_type_tail_impl(const char *src, size_t len, size_t i, bool stop_before_arrow) {
   int paren = 0, bracket = 0, brace = 0, angle = 0;
   bool seen_type_token = false;
@@ -17,7 +7,7 @@ static size_t skip_type_tail_impl(const char *src, size_t len, size_t i, bool st
   while (i < len) {
     char c = src[i];
     if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token) break;
-    if (isspace((unsigned char)c)) {
+    if (skim_is_space(c)) {
       i++;
       continue;
     }
@@ -34,10 +24,7 @@ static size_t skip_type_tail_impl(const char *src, size_t len, size_t i, bool st
       continue;
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
+      i = skim_skip_block_comment(src, len, i + 2);
       continue;
     }
     if (
@@ -54,7 +41,7 @@ static size_t skip_type_tail_impl(const char *src, size_t len, size_t i, bool st
     else if (c == '{') {
       if (paren == 0 && bracket == 0 && angle == 0 && brace == 0 && seen_type_token && !after_arrow) {
         size_t p = i;
-        while (p > 0 && isspace((unsigned char)src[p - 1]))
+        while (p > 0 && skim_is_space(src[p - 1]))
           p--;
         char prev = p > 0 ? src[p - 1] : '\0';
         if (prev != '|' && prev != '&' && prev != ',' && prev != '(' && prev != '<') break;
@@ -74,7 +61,7 @@ static size_t skip_type_tail_impl(const char *src, size_t len, size_t i, bool st
       if (c == ',' || c == ';' || c == '=' || c == '\n') break;
     }
     seen_type_token = true;
-    if (!isspace((unsigned char)c)) after_arrow = false;
+    after_arrow = false;
     i++;
   }
   return i;
@@ -92,18 +79,7 @@ static size_t find_top_level_arrow(const char *src, size_t len, size_t i, size_t
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (c == '=' && src[i + 1] == '>') {
       if (paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i;
       i += 2;
@@ -130,7 +106,7 @@ static size_t skip_return_type_tail(const char *src, size_t len, size_t i) {
 static bool comma_looks_like_param_separator(const char *src, size_t comma);
 
 static char prev_non_ws_char(const char *src, size_t i) {
-  while (i > 0 && isspace((unsigned char)src[i - 1]))
+  while (i > 0 && skim_is_space(src[i - 1]))
     i--;
   return i > 0 ? src[i - 1] : '\0';
 }
@@ -172,52 +148,6 @@ static bool this_looks_like_bare_parameter(const char *src, size_t len, size_t i
          (src[after] == '{' || src[after] == ':' || (src[after] == '=' && after + 1 < len && src[after + 1] == '>'));
 }
 
-static bool colon_looks_like_ternary(const char *src, size_t i) {
-  int paren = 0, bracket = 0, brace = 0;
-  for (size_t k = i; k > 0;) {
-    char c = src[--k];
-    if (c == ')') paren++;
-    else if (c == '(' && paren > 0) paren--;
-    else if (c == '(' && paren == 0 && bracket == 0 && brace == 0) return false;
-    else if (c == ']') bracket++;
-    else if (c == '[' && bracket > 0) bracket--;
-    else if (c == '}') brace++;
-    else if (c == '{') {
-      if (brace == 0 && paren == 0 && bracket == 0) return false;
-      if (brace > 0) brace--;
-    } else if (c == '?' && paren == 0 && bracket == 0 && brace == 0) {
-      if (k + 1 == i && k > 0 && skim_is_id_part(src[k - 1])) return false;
-      return true;
-    } else if ((c == ';' || c == ':') && paren == 0 && bracket == 0 && brace == 0) {
-      return false;
-    }
-  }
-  return false;
-}
-
-static bool colon_looks_like_case_label(const char *src, size_t i) {
-  size_t k = i;
-  while (k > 0 && src[k - 1] != '\n' && src[k - 1] != '\r' && src[k - 1] != ';')
-    k--;
-  size_t line = skim_skip_ws(src, i, k);
-  if (!skim_word_at(src, i, line, "case") && !skim_word_at(src, i, line, "default")) return false;
-  int paren = 0, bracket = 0, brace = 0;
-  for (size_t p = line; p < i; p++) {
-    char c = src[p];
-    if (c == '\'' || c == '"' || c == '`') {
-      p = skim_skip_string_raw(src, i, p) - 1;
-      continue;
-    }
-    if (c == '(') paren++;
-    else if (c == ')' && paren > 0) paren--;
-    else if (c == '[') bracket++;
-    else if (c == ']' && bracket > 0) bracket--;
-    else if (c == '{') brace++;
-    else if (c == '}' && brace > 0) brace--;
-  }
-  return paren == 0 && bracket == 0 && brace == 0;
-}
-
 static bool colon_looks_like_statement_label(const char *src, size_t len, size_t i) {
   size_t k = i;
   while (k > 0 && (src[k - 1] == ' ' || src[k - 1] == '\t'))
@@ -235,7 +165,7 @@ static bool colon_looks_like_statement_label(const char *src, size_t len, size_t
   )
     return false;
   size_t before_line = line;
-  while (before_line > 0 && isspace((unsigned char)src[before_line - 1]))
+  while (before_line > 0 && skim_is_space(src[before_line - 1]))
     before_line--;
   if (before_line > 0 && (src[before_line - 1] == '(' || src[before_line - 1] == ',')) return false;
   size_t next = skim_skip_ws(src, len, i + 1);
@@ -258,6 +188,8 @@ static bool colon_looks_like_statement_label(const char *src, size_t len, size_t
   int paren = 0, bracket = 0, brace = 0;
   for (size_t p = start; p > 0;) {
     char c = src[--p];
+    if (!skim_char_has(c, SKIM_CC_BACK_STOP)) continue;
+    if (((c == ')' && paren >= 0) || c == ']' || c == '}') && skim_back_skip_block(src, &p)) continue;
     if (c == ')') paren++;
     else if (c == ']') bracket++;
     else if (c == '}') brace++;
@@ -295,21 +227,24 @@ static bool colon_looks_like_statement_label(const char *src, size_t len, size_t
          skim_word_at(src, len, next, "continue");
 }
 
-static bool word_before_pos(const char *src, size_t i, const char *word) {
-  while (i > 0 && isspace((unsigned char)src[i - 1]))
-    i--;
-  size_t end = i;
-  while (i > 0 && skim_is_id_part(src[i - 1]))
-    i--;
-  size_t n = strlen(word);
-  return end - i == n && memcmp(src + i, word, n) == 0;
+enum { OBJECT_SCAN_MEMO_SIZE = 256 };
+
+static struct {
+  const char *src;
+  size_t pos_plus_one[OBJECT_SCAN_MEMO_SIZE];
+  bool result[OBJECT_SCAN_MEMO_SIZE];
+} object_scan_memo;
+
+void skim_ts_annotations_memo_invalidate(void) {
+  object_scan_memo.src = NULL;
 }
 
-static bool colon_looks_like_value_object_property(const char *src, size_t i) {
-  if (prev_non_ws_char(src, i) == ')') return false;
+static bool value_object_scan(const char *src, size_t i, bool memo_active) {
   int paren = 0, bracket = 0, brace = 0;
   for (size_t k = i; k > 0;) {
     char c = src[--k];
+    if (!skim_char_has(c, SKIM_CC_BACK_STOP)) continue;
+    if ((c == ')' || c == ']' || c == '}') && skim_back_skip_block(src, &k)) continue;
     if (c == ')') paren++;
     else if (c == '(') {
       if (paren > 0) paren--;
@@ -323,17 +258,34 @@ static bool colon_looks_like_value_object_property(const char *src, size_t i) {
         brace--;
       } else if (paren == 0 && bracket == 0) {
         size_t before = k;
-        while (before > 0 && isspace((unsigned char)src[before - 1]))
+        while (before > 0 && skim_is_space(src[before - 1]))
           before--;
         char prev = before > 0 ? src[before - 1] : '\0';
         return prev == '=' || prev == '(' || prev == ',' || prev == '[' || prev == ':' ||
-               word_before_pos(src, before, "return") || word_before_pos(src, before, "yield");
+               skim_word_before(src, before, "return") || skim_word_before(src, before, "yield");
       }
     } else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) {
       return false;
+    } else if (c == ':' && memo_active && paren == 0 && bracket == 0 && brace == 0) {
+      size_t slot = k % OBJECT_SCAN_MEMO_SIZE;
+      if (object_scan_memo.pos_plus_one[slot] == k + 1) return object_scan_memo.result[slot];
     }
   }
   return false;
+}
+
+static bool colon_looks_like_value_object_property(const char *src, size_t i) {
+  if (prev_non_ws_char(src, i) == ')') return false;
+  if (!skim_scan_cache_owns(src)) return value_object_scan(src, i, false);
+  if (object_scan_memo.src != src) {
+    memset(object_scan_memo.pos_plus_one, 0, sizeof(object_scan_memo.pos_plus_one));
+    object_scan_memo.src = src;
+  }
+  bool result = value_object_scan(src, i, true);
+  size_t slot = i % OBJECT_SCAN_MEMO_SIZE;
+  object_scan_memo.pos_plus_one[slot] = i + 1;
+  object_scan_memo.result[slot] = result;
+  return result;
 }
 
 static bool comma_is_in_var_decl(const char *src, size_t comma) {
@@ -385,11 +337,11 @@ static bool colon_is_in_var_decl(const char *src, size_t colon) {
 }
 
 static bool prev_allows_type_colon(const char *src, size_t len, size_t i) {
-  while (i > 0 && isspace((unsigned char)src[i - 1]))
+  while (i > 0 && skim_is_space(src[i - 1]))
     i--;
   if (i > 0 && (src[i - 1] == '?' || src[i - 1] == '!')) {
     i--;
-    while (i > 0 && isspace((unsigned char)src[i - 1]))
+    while (i > 0 && skim_is_space(src[i - 1]))
       i--;
   }
   if (i == 0) return false;
@@ -403,7 +355,7 @@ static bool prev_allows_type_colon(const char *src, size_t len, size_t i) {
       else if (src[bracket] == '[') depth--;
     }
     size_t before_bracket = bracket;
-    while (before_bracket > 0 && isspace((unsigned char)src[before_bracket - 1]))
+    while (before_bracket > 0 && skim_is_space(src[before_bracket - 1]))
       before_bracket--;
     if (
       before_bracket > 0 &&
@@ -422,7 +374,7 @@ static bool prev_allows_type_colon(const char *src, size_t len, size_t i) {
     while (ident_start > 0 && skim_is_id_part(src[ident_start - 1]))
       ident_start--;
     size_t before_ident = ident_start;
-    while (before_ident > 0 && isspace((unsigned char)src[before_ident - 1]))
+    while (before_ident > 0 && skim_is_space(src[before_ident - 1]))
       before_ident--;
     if (before_ident > 0 && src[before_ident - 1] == ',' && comma_looks_like_param_separator(src, before_ident - 1)) {
       return true;
@@ -447,7 +399,7 @@ static bool next_looks_like_type(const char *src, size_t len, size_t i) {
   i = skim_skip_ws(src, len, i);
   if (i >= len) return false;
   if (skim_is_id_start(src[i])) return true;
-  if (isdigit((unsigned char)src[i]) || src[i] == '\'' || src[i] == '"' || src[i] == '`') return true;
+  if (skim_is_digit(src[i]) || src[i] == '\'' || src[i] == '"' || src[i] == '`') return true;
   return src[i] == '{' || src[i] == '[' || src[i] == '(' || src[i] == '<' || src[i] == '-' || src[i] == '|' ||
          src[i] == '&';
 }
@@ -459,7 +411,7 @@ static bool type_alias_at(const char *src, size_t len, size_t i) {
   size_t name_start = 0, name_end = 0;
   size_t j = skim_parse_identifier(src, len, i + 4, &name_start, &name_end);
   if (name_start == name_end) return false;
-  if (range_has_newline(src, i + 4, name_start)) return false;
+  if (skim_range_has_newline(src, i + 4, name_start)) return false;
   j = skim_skip_ws(src, len, j);
   if (j < len && src[j] == '<') j = skip_angle_type_list(src, len, j);
   j = skim_skip_ws(src, len, j);
@@ -493,20 +445,8 @@ static size_t skip_type_declaration_statement(const char *src, size_t len, size_
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
-    if (isspace((unsigned char)c)) {
+    if (skim_skip_comment(src, len, &i)) continue;
+    if (skim_is_space(c)) {
       i++;
       continue;
     }
@@ -519,10 +459,8 @@ static size_t skip_type_declaration_statement(const char *src, size_t len, size_
     else if (c == '<') angle++;
     else if (c == '>' && angle > 0) angle--;
     else if (c == ';' && paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i + 1;
-    if (!isspace((unsigned char)c)) {
-      seen_type_token = true;
-      last_sig = c;
-    }
+    seen_type_token = true;
+    last_sig = c;
     i++;
   }
   return i;
@@ -537,18 +475,7 @@ static size_t skip_declare_function_statement(const char *src, size_t len, size_
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if ((c == '\n' || c == '\r') && saw_params && paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i;
     if (c == '=' && i + 1 < len && src[i + 1] == '>') {
       i += 2;
@@ -578,18 +505,7 @@ static size_t find_interface_body_or_semicolon(const char *src, size_t len, size
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     if (angle > 0 && c == '{') {
       i = skim_skip_balanced(src, len, i, '{', '}');
       continue;
@@ -610,6 +526,10 @@ static size_t skip_angle_type_list(const char *src, size_t len, size_t i) {
   int depth = 0;
   int paren = 0, bracket = 0, brace = 0;
   while (i < len) {
+    if (!skim_char_has(src[i], SKIM_CC_ANGLE)) {
+      i++;
+      continue;
+    }
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
       i = skim_skip_string_raw(src, len, i);
       continue;
@@ -637,19 +557,9 @@ static size_t skip_angle_type_list(const char *src, size_t len, size_t i) {
 }
 
 static bool prev_is_identifierish(const char *src, size_t i) {
-  while (i > 0 && isspace((unsigned char)src[i - 1]))
+  while (i > 0 && skim_is_space(src[i - 1]))
     i--;
   return i > 0 && (skim_is_id_part(src[i - 1]) || src[i - 1] == ')' || src[i - 1] == ']');
-}
-
-static bool prev_word_before(const char *src, size_t i, const char *word) {
-  while (i > 0 && isspace((unsigned char)src[i - 1]))
-    i--;
-  size_t end = i;
-  while (i > 0 && skim_is_id_part(src[i - 1]))
-    i--;
-  size_t len = strlen(word);
-  return end - i == len && memcmp(src + i, word, len) == 0;
 }
 
 static bool colon_after_function_like_params(const char *src, size_t i) {
@@ -657,6 +567,8 @@ static bool colon_after_function_like_params(const char *src, size_t i) {
   size_t open = i;
   while (open > 0) {
     char c = src[--open];
+    if (!skim_char_has(c, SKIM_CC_BRACKET)) continue;
+    if ((c == ')' || c == ']' || c == '}') && skim_back_skip_block(src, &open)) continue;
     if (c == ')') depth++;
     else if (c == '(') {
       if (depth == 0) break;
@@ -665,7 +577,7 @@ static bool colon_after_function_like_params(const char *src, size_t i) {
   }
   if (open == 0 && src[open] != '(') return false;
   size_t before = open;
-  while (before > 0 && isspace((unsigned char)src[before - 1]))
+  while (before > 0 && skim_is_space(src[before - 1]))
     before--;
   if (before == 0) return false;
   if (!skim_is_id_part(src[before - 1])) return false;
@@ -673,7 +585,7 @@ static bool colon_after_function_like_params(const char *src, size_t i) {
   while (before > 0 && skim_is_id_part(src[before - 1]))
     before--;
   size_t prev = before;
-  while (prev > 0 && isspace((unsigned char)src[prev - 1]))
+  while (prev > 0 && skim_is_space(src[prev - 1]))
     prev--;
   if (prev > 0 && skim_is_id_part(src[prev - 1])) {
     size_t word_end = prev;
@@ -692,6 +604,8 @@ static bool comma_looks_like_param_separator(const char *src, size_t comma) {
   int paren = 0, bracket = 0, brace = 0;
   for (size_t k = comma; k > 0;) {
     char c = src[--k];
+    if (!skim_char_has(c, SKIM_CC_BACK_STOP)) continue;
+    if ((c == ')' || c == ']' || c == '}') && skim_back_skip_block(src, &k)) continue;
     if (c == ')') paren++;
     else if (c == '(') {
       if (paren == 0 && bracket == 0 && brace == 0) return true;
@@ -756,8 +670,8 @@ static bool angle_is_probably_type_assertion(const char *src, size_t len, size_t
   if (src[i] != '<') return false;
   if (i + 1 < len && src[i + 1] == '<') return false;
   if (
-    prev_is_identifierish(src, i) && !prev_word_before(src, i, "return") && !prev_word_before(src, i, "throw") &&
-    !prev_word_before(src, i, "yield")
+    prev_is_identifierish(src, i) && !skim_word_before(src, i, "return") && !skim_word_before(src, i, "throw") &&
+    !skim_word_before(src, i, "yield")
   )
     return false;
   size_t end = skip_angle_type_list(src, len, i);
@@ -765,7 +679,7 @@ static bool angle_is_probably_type_assertion(const char *src, size_t len, size_t
   size_t j = skim_skip_ws(src, len, end);
   if (j >= len) return false;
   if (
-    skim_is_id_start(src[j]) || isdigit((unsigned char)src[j]) || src[j] == '<' || src[j] == '(' || src[j] == '[' ||
+    skim_is_id_start(src[j]) || skim_is_digit(src[j]) || src[j] == '<' || src[j] == '(' || src[j] == '[' ||
     src[j] == '{' || src[j] == '+' || src[j] == '-' || src[j] == '~' || src[j] == '!' || src[j] == '\'' ||
     src[j] == '"' || src[j] == '`'
   ) {
@@ -797,7 +711,7 @@ static bool try_remove_uninitialized_class_field(const char *src, size_t len, si
       return true;
     }
   }
-  if (src[j] == '#') return false;
+  if (j >= len || src[j] == '#') return false;
   if (j < len && src[j] == '[') {
     size_t close = skim_skip_balanced(src, len, j, '[', ']');
     size_t after = skim_skip_ws(src, len, close);
@@ -839,8 +753,7 @@ static bool try_remove_function_overload(const char *src, size_t len, size_t i, 
     else if (c == ']' && bracket > 0) bracket--;
     else if (c == '<') angle++;
     else if (c == '>' && angle > 0) angle--;
-    else if (c == ':' && paren == 0 && bracket == 0 && brace == 0 && angle == 0) {
-    } else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0) {
+    else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0) {
       size_t next = skim_skip_ws_comments(src, len, j + 1);
       if (skim_word_at(src, len, next, "function")) {
         *end_out = next;
@@ -915,7 +828,7 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
   if (skim_word_at(src, len, i, "abstract")) {
     size_t j = skim_skip_ws(src, len, i + 8);
     if (skim_word_at(src, len, j, "class")) {
-      if (range_has_newline(src, i + 8, j)) return false;
+      if (skim_range_has_newline(src, i + 8, j)) return false;
       *io = i + 8;
       return true;
     }
@@ -947,9 +860,9 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
       char prev = prev_non_ws_same_line_char(src, i);
       if (
         prev != '(' && prev != ',' && prev != '{' && prev != ';' && prev != '\n' && prev != '\r' &&
-        !prev_word_before(src, i, "public") && !prev_word_before(src, i, "private") &&
-        !prev_word_before(src, i, "protected") && !prev_word_before(src, i, "readonly") &&
-        !prev_word_before(src, i, "override")
+        !skim_word_before(src, i, "public") && !skim_word_before(src, i, "private") &&
+        !skim_word_before(src, i, "protected") && !skim_word_before(src, i, "readonly") &&
+        !skim_word_before(src, i, "override")
       )
         return false;
       *io = i + strlen(modifiers[m]);
@@ -961,7 +874,7 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
     char prev = prev_non_ws_same_line_char(src, i);
     if (prev != '\0' && prev != ';' && prev != '{' && prev != '}' && prev != '\n' && prev != '\r') return false;
     size_t after_interface = skim_skip_ws_comments(src, len, i + 9);
-    if (range_has_newline(src, i + 9, after_interface)) return false;
+    if (skim_range_has_newline(src, i + 9, after_interface)) return false;
     if (after_interface < len && (src[after_interface] == ';' || src[after_interface] == '=')) return false;
     size_t body = find_interface_body_or_semicolon(src, len, i + 9);
     size_t end = body;
@@ -988,10 +901,10 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
   }
 
   bool is_declare_keyword = false;
-  if (skim_word_at(src, len, i, "declare") && !prev_word_before(src, i, "function")) {
+  if (skim_word_at(src, len, i, "declare") && !skim_word_before(src, i, "function")) {
     size_t after_declare = skim_skip_ws_comments(src, len, i + 7);
     is_declare_keyword =
-      !range_has_newline(src, i + 7, after_declare) &&
+      !skim_range_has_newline(src, i + 7, after_declare) &&
       (skim_word_at(src, len, after_declare, "class") || skim_word_at(src, len, after_declare, "enum") ||
        skim_word_at(src, len, after_declare, "namespace") || skim_word_at(src, len, after_declare, "module") ||
        skim_word_at(src, len, after_declare, "interface") || skim_word_at(src, len, after_declare, "global") ||
@@ -1031,7 +944,7 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
   }
 
   if (
-    src[i] == ':' && !colon_looks_like_ternary(src, i) && !colon_looks_like_case_label(src, i) &&
+    src[i] == ':' && !skim_colon_looks_like_ternary(src, i) && !skim_colon_looks_like_case_label(src, i) &&
     !colon_looks_like_statement_label(src, len, i) && !colon_looks_like_value_object_property(src, i) &&
     prev_allows_type_colon(src, len, i) && next_looks_like_type(src, len, i + 1)
   ) {
@@ -1056,13 +969,13 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
         break;
       }
     }
-    if (prev_non_ws_char(src, i) == ')' && !colon_after_function_like_params(src, i)) {
-      size_t type_start = skim_skip_ws(src, len, i + 1);
-      if (type_start < len && src[type_start] == '(') {
-        size_t after_params = skim_skip_ws(src, len, skim_skip_balanced(src, len, type_start, '(', ')'));
-        if (after_params + 1 < len && src[after_params] == '=' && src[after_params + 1] == '>') {
-          end = skip_return_type_tail(src, len, after_params + 2);
-        }
+    if (
+      after_colon < len && src[after_colon] == '(' && prev_non_ws_char(src, i) == ')' &&
+      !colon_after_function_like_params(src, i)
+    ) {
+      size_t after_params = skim_skip_ws(src, len, skim_skip_balanced(src, len, after_colon, '(', ')'));
+      if (after_params + 1 < len && src[after_params] == '=' && src[after_params + 1] == '>') {
+        end = skip_return_type_tail(src, len, after_params + 2);
       }
     }
     if (end + 1 < len && src[end] == '=' && src[end + 1] == '>') {
@@ -1087,9 +1000,9 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
     char prev = prev_non_ws_same_line_char(src, i);
     if (!(skim_is_id_part(prev) || prev == ')' || prev == ']')) return false;
     if (
-      prev_word_before(src, i, "return") || prev_word_before(src, i, "throw") || prev_word_before(src, i, "yield") ||
-      prev_word_before(src, i, "case") || prev_word_before(src, i, "delete") || prev_word_before(src, i, "void") ||
-      prev_word_before(src, i, "typeof")
+      skim_word_before(src, i, "return") || skim_word_before(src, i, "throw") || skim_word_before(src, i, "yield") ||
+      skim_word_before(src, i, "case") || skim_word_before(src, i, "delete") || skim_word_before(src, i, "void") ||
+      skim_word_before(src, i, "typeof")
     )
       return false;
     size_t end = i + 1;
@@ -1112,8 +1025,8 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
     prev_non_ws_same_line_char(src, i) != '\r' && prev_non_ws_char(src, i) != '=' && prev_non_ws_char(src, i) != '(' &&
     prev_non_ws_char(src, i) != '[' && prev_non_ws_char(src, i) != '{' && prev_non_ws_char(src, i) != ',' &&
     prev_non_ws_char(src, i) != ';' && prev_non_ws_char(src, i) != ':' && prev_non_ws_char(src, i) != '*' &&
-    !prev_word_before(src, i, "var") && !prev_word_before(src, i, "let") && !prev_word_before(src, i, "const") &&
-    !prev_word_before(src, i, "function")
+    !skim_word_before(src, i, "var") && !skim_word_before(src, i, "let") && !skim_word_before(src, i, "const") &&
+    !skim_word_before(src, i, "function")
   ) {
     *io = skip_type_tail(src, len, i + 2);
     return true;

@@ -1,19 +1,11 @@
 #include "skim_internal.h"
 
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static char **used_namespace_params;
 static size_t used_namespace_param_count;
-
-static bool range_has_newline(const char *src, size_t start, size_t end) {
-  for (size_t i = start; i < end; i++) {
-    if (src[i] == '\n' || src[i] == '\r') return true;
-  }
-  return false;
-}
 
 void skim_ts_namespace_reset(void) {
   for (size_t i = 0; i < used_namespace_param_count; i++) {
@@ -94,7 +86,8 @@ static bool namespace_body_has_ambient_decl(const char *src, size_t len, size_t 
     i = skim_skip_ws_comments(src, len, i);
     if (i >= end) break;
     if (skim_word_at(src, len, i, "export")) i = skim_skip_ws_comments(src, len, i + 6);
-    if (i < end && skim_word_at(src, len, i, "declare")) {
+    if (i >= end) break;
+    if (skim_word_at(src, len, i, "declare")) {
       size_t after_declare = skim_skip_ws_comments(src, len, i + 7);
       if (
         !skim_word_at(src, len, after_declare, "namespace") && !skim_word_at(src, len, after_declare, "module") &&
@@ -111,7 +104,7 @@ static bool namespace_body_has_ambient_decl(const char *src, size_t len, size_t 
                                          : skim_skip_statement_like(src, len, body);
       continue;
     }
-    if (i < end && skim_word_at(src, len, i, "function")) {
+    if (skim_word_at(src, len, i, "function")) {
       size_t p = i + 8;
       int paren = 0, bracket = 0, angle = 0;
       while (p < end) {
@@ -166,14 +159,14 @@ static bool namespace_source_has_runtime_code(const char *src, size_t len, size_
     if (skim_word_at(src, len, i, "type") || skim_word_at(src, len, i, "interface")) {
       size_t kw_len = skim_word_at(src, len, i, "type") ? 4 : 9;
       size_t name_start = skim_skip_ws_comments(src, len, i + kw_len);
-      if (range_has_newline(src, i + kw_len, name_start)) return true;
+      if (skim_range_has_newline(src, i + kw_len, name_start)) return true;
       i = skip_type_like_decl(src, len, i);
       continue;
     }
     if (skim_word_at(src, len, i, "namespace") || skim_word_at(src, len, i, "module")) {
       size_t kw_len = skim_word_at(src, len, i, "namespace") ? 9 : 6;
       size_t j = skim_skip_ws_comments(src, len, i + kw_len);
-      if (range_has_newline(src, i + kw_len, j)) return true;
+      if (skim_range_has_newline(src, i + kw_len, j)) return true;
       size_t name_start = 0, name_end = 0;
       j = skim_parse_identifier(src, len, j, &name_start, &name_end);
       if (name_start == name_end) return true;
@@ -207,19 +200,7 @@ static bool future_runtime_namespace_decl(const char *src, size_t len, size_t st
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-        i++;
-      if (i + 1 < len) i += 2;
-      continue;
-    }
+    if (skim_skip_comment(src, len, &i)) continue;
     size_t item = i;
     if (skim_word_at(src, len, item, "export")) item = skim_skip_ws_comments(src, len, item + 6);
     if (skim_word_at(src, len, item, "namespace") || skim_word_at(src, len, item, "module")) {
@@ -320,19 +301,79 @@ static bool prior_value_decl(const char *src, size_t pos, const char *name) {
   return skim_decl_seen_before(src, name, pos, SKIM_DECL_VALUE);
 }
 
-static bool local_value_decl_before(const char *src, size_t len, size_t pos, const char *name) {
-  static const char *decls[] = {"class", "function", "var", "let", "const"};
-  size_t name_len = strlen(name);
-  for (size_t i = 0; i < pos && i < len; i++) {
-    for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
-      const char *kw = decls[d];
-      if (!skim_word_at(src, len, i, kw)) continue;
-      size_t name_start = 0, name_end = 0;
-      skim_parse_identifier(src, len, i + strlen(kw), &name_start, &name_end);
-      if (name_end - name_start == name_len && memcmp(src + name_start, name, name_len) == 0) return true;
+typedef struct {
+  size_t pos;
+  size_t name_start;
+  size_t name_end;
+} local_decl_t;
+
+static struct {
+  const char *src;
+  local_decl_t *items;
+  size_t count;
+  size_t cap;
+} local_decl_index;
+
+void skim_ts_namespace_decl_index_invalidate(void) {
+  free(local_decl_index.items);
+  local_decl_index.items = NULL;
+  local_decl_index.src = NULL;
+  local_decl_index.count = 0;
+  local_decl_index.cap = 0;
+}
+
+static size_t local_decl_keyword_len(const char *word, size_t n) {
+  bool keyword = (n == 3 && (memcmp(word, "var", 3) == 0 || memcmp(word, "let", 3) == 0)) ||
+                 (n == 5 && (memcmp(word, "class", 5) == 0 || memcmp(word, "const", 5) == 0)) ||
+                 (n == 8 && memcmp(word, "function", 8) == 0);
+  return keyword ? n : 0;
+}
+
+static void local_decls_for_source(const char *src, size_t len) {
+  skim_ts_namespace_decl_index_invalidate();
+  local_decl_index.src = src;
+  for (size_t i = 0; i < len;) {
+    if (!skim_is_id_part(src[i])) {
+      i++;
+      continue;
     }
+    size_t word = i;
+    while (i < len && skim_is_id_part(src[i]))
+      i++;
+    size_t keyword_len = local_decl_keyword_len(src + word, i - word);
+    if (!keyword_len) continue;
+    size_t name_start = 0, name_end = 0;
+    skim_parse_identifier(src, len, i, &name_start, &name_end);
+    if (name_end == name_start) continue;
+    if (local_decl_index.count == local_decl_index.cap) {
+      size_t cap = local_decl_index.cap ? local_decl_index.cap * 2 : 128;
+      local_decl_t *next = realloc(local_decl_index.items, sizeof(*next) * cap);
+      if (!next) skim_die("out of memory");
+      local_decl_index.items = next;
+      local_decl_index.cap = cap;
+    }
+    local_decl_index.items[local_decl_index.count++] =
+      (local_decl_t){.pos = word, .name_start = name_start, .name_end = name_end};
+  }
+}
+
+static bool local_value_decl_before(const char *src, size_t len, size_t pos, const char *name) {
+  if (!skim_scan_cache_owns(src)) local_decls_for_source(src, len);
+  else if (local_decl_index.src != src) local_decls_for_source(src, skim_scan_cache_len());
+  size_t name_len = strlen(name);
+  for (size_t i = 0; i < local_decl_index.count && local_decl_index.items[i].pos < pos; i++) {
+    const local_decl_t *decl = &local_decl_index.items[i];
+    if (decl->name_end > len || decl->name_end - decl->name_start != name_len) continue;
+    if (memcmp(src + decl->name_start, name, name_len) == 0) return true;
   }
   return false;
+}
+
+static size_t namespace_end_after_body(const char *src, size_t len, size_t body_end) {
+  size_t end = body_end + 1;
+  if (end < len && src[end] == '}') end++;
+  if (end < len && src[end] == ';') end++;
+  return end;
 }
 
 static void
@@ -477,7 +518,7 @@ static bool transform_export_namespace(skim_str_t *out, const char *ns, const ch
         skim_str_puts(&synthetic, parts[p]);
         skim_str_puts(&synthetic, " { ");
       }
-      skim_str_putn(&synthetic, src + body_start, body_end - body_start);
+      if (body_end > body_start) skim_str_putn(&synthetic, src + body_start, body_end - body_start);
       for (size_t p = 0; p < part_count; p++)
         skim_str_puts(&synthetic, " }");
       char *lowered = skim_transform_typescript(synthetic.data, synthetic.len);
@@ -490,9 +531,7 @@ static bool transform_export_namespace(skim_str_t *out, const char *ns, const ch
       skim_str_puts(out, ";\n");
       free(lowered);
       free(synthetic.data);
-      *io = body_end + 1;
-      if (*io < len && src[*io] == '}') (*io)++;
-      if (*io < len && src[*io] == ';') (*io)++;
+      *io = namespace_end_after_body(src, len, body_end);
       for (size_t p = 0; p < part_count; p++)
         free(parts[p]);
       free(parts);
@@ -521,9 +560,7 @@ static bool transform_export_namespace(skim_str_t *out, const char *ns, const ch
     free(body.data);
     free(param);
     free(name);
-    *io = body_end + 1;
-    if (*io < len && src[*io] == '}') (*io)++;
-    if (*io < len && src[*io] == ';') (*io)++;
+    *io = namespace_end_after_body(src, len, body_end);
     return true;
   }
 
@@ -532,38 +569,35 @@ static bool transform_export_namespace(skim_str_t *out, const char *ns, const ch
     skim_str_puts(out, name);
     skim_str_puts(out, ";\n");
   }
-  if (has_body) {
-    skim_str_puts(out, "(function (");
-    skim_str_puts(out, param);
-    skim_str_puts(out, ") {\n");
-    skim_str_putn(out, body.data, body.len);
-    skim_str_puts(out, "\n})(");
-    skim_str_puts(out, name);
-    skim_str_puts(out, " || (");
-    skim_str_puts(out, name);
-    skim_str_puts(out, " = ");
-    skim_str_puts(out, ns);
-    skim_str_putc(out, '.');
-    skim_str_puts(out, name);
-    skim_str_puts(out, " || (");
-    skim_str_puts(out, ns);
-    skim_str_putc(out, '.');
-    skim_str_puts(out, name);
-    skim_str_puts(out, " = {})));\n");
-  }
+  skim_str_puts(out, "(function (");
+  skim_str_puts(out, param);
+  skim_str_puts(out, ") {\n");
+  skim_str_putn(out, body.data, body.len);
+  skim_str_puts(out, "\n})(");
+  skim_str_puts(out, name);
+  skim_str_puts(out, " || (");
+  skim_str_puts(out, name);
+  skim_str_puts(out, " = ");
+  skim_str_puts(out, ns);
+  skim_str_putc(out, '.');
+  skim_str_puts(out, name);
+  skim_str_puts(out, " || (");
+  skim_str_puts(out, ns);
+  skim_str_putc(out, '.');
+  skim_str_puts(out, name);
+  skim_str_puts(out, " = {})));\n");
 
   free(body.data);
   free(param);
   free(name);
-  *io = body_end + 1;
-  if (*io < len && src[*io] == '}') (*io)++;
-  if (*io < len && src[*io] == ';') (*io)++;
+  *io = namespace_end_after_body(src, len, body_end);
   return true;
 }
 
 static void
 transform_namespace_body(skim_str_t *out, const char *ns_param, const char *src, size_t len, size_t start, size_t end) {
   for (size_t i = start; i < end;) {
+    if (skim_emit_copy_plain_span(out, src, end, &i)) continue;
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
       i = skim_copy_string(out, src, end, i);
       continue;
@@ -583,9 +617,9 @@ transform_namespace_body(skim_str_t *out, const char *ns_param, const char *src,
     if (src[i] == 'e' && transform_export_class(out, ns_param, src, end, &i)) continue;
     if (src[i] == 'e' && transform_export_const(out, ns_param, src, end, &i)) continue;
     if (skim_transform_try_at(out, src, end, &i)) continue;
-    if (isdigit((unsigned char)src[i])) {
+    if (skim_is_digit(src[i])) {
       size_t j = i;
-      while (j < end && isdigit((unsigned char)src[j]))
+      while (j < end && skim_is_digit(src[j]))
         j++;
       if (j + 1 < end && src[j] == '.' && src[j + 1] == ':') {
         skim_str_putn(out, src + i, j - i);
@@ -615,7 +649,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
   size_t after_keyword = i + (skim_word_at(src, len, i, "namespace") ? 9 : 6);
   i = skim_parse_identifier(src, len, after_keyword, &name_start, &name_end);
   if (name_start == name_end) return false;
-  if (range_has_newline(src, after_keyword, name_start)) return false;
+  if (skim_range_has_newline(src, after_keyword, name_start)) return false;
   if (skim_word_at(src, len, *io, "module") && name_end - name_start == 2 && memcmp(src + name_start, "in", 2) == 0)
     return false;
   char *name = skim_slice_dup(src, name_start, name_end);
@@ -651,16 +685,14 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
         skim_str_puts(&synthetic, parts[p]);
         skim_str_puts(&synthetic, " { ");
       }
-      skim_str_putn(&synthetic, src + body_start, body_end - body_start);
+      if (body_end > body_start) skim_str_putn(&synthetic, src + body_start, body_end - body_start);
       for (size_t p = 0; p < part_count; p++)
         skim_str_puts(&synthetic, " }");
       char *lowered = skim_transform_typescript(synthetic.data, synthetic.len);
       skim_str_puts(out, lowered);
       free(lowered);
       free(synthetic.data);
-      *io = body_end + 1;
-      if (*io < len && src[*io] == '}') (*io)++;
-      if (*io < len && src[*io] == ';') (*io)++;
+      *io = namespace_end_after_body(src, len, body_end);
       for (size_t p = 0; p < part_count; p++)
         free(parts[p]);
       free(parts);
@@ -694,9 +726,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
                     skim_has_effective_code(body.data ? body.data : "", body.len);
     free(body.data);
     if (!is_export && !has_body) {
-      *io = body_end + 1;
-      if (*io < len && src[*io] == '}') (*io)++;
-      if (*io < len && src[*io] == ';') (*io)++;
+      *io = namespace_end_after_body(src, len, body_end);
       free(inner);
       free(name);
       return true;
@@ -712,9 +742,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
         skim_str_puts(out, name);
         skim_str_puts(out, ";\n");
       }
-      *io = body_end + 1;
-      if (*io < len && src[*io] == '}') (*io)++;
-      if (*io < len && src[*io] == ';') (*io)++;
+      *io = namespace_end_after_body(src, len, body_end);
       free(inner);
       free(name);
       return true;
@@ -766,9 +794,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
     free(body.data);
     free(outer_param);
     free(inner_param);
-    *io = body_end + 1;
-    if (*io < len && src[*io] == '}') (*io)++;
-    if (*io < len && src[*io] == ';') (*io)++;
+    *io = namespace_end_after_body(src, len, body_end);
     free(inner);
     free(name);
     return true;
@@ -799,9 +825,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
       skim_str_puts(out, ";\n");
     }
     free(body.data);
-    *io = body_end + 1;
-    if (*io < len && src[*io] == '}') (*io)++;
-    if (*io < len && src[*io] == ';') (*io)++;
+    *io = namespace_end_after_body(src, len, body_end);
     free(name);
     return true;
   }
@@ -815,15 +839,6 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
     skim_str_puts(out, name);
     skim_str_puts(out, ";\n");
   }
-  if (!has_body && !has_ambient_decl) {
-    free(body.data);
-    *io = body_end + 1;
-    if (*io < len && src[*io] == '}') (*io)++;
-    if (*io < len && src[*io] == ';') (*io)++;
-    free(name);
-    return true;
-  }
-
   free(body.data);
   body.data = NULL;
   body.len = 0;
@@ -844,9 +859,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
   skim_str_puts(out, name);
   skim_str_puts(out, " = {}));\n");
 
-  *io = body_end + 1;
-  if (*io < len && src[*io] == '}') (*io)++;
-  if (*io < len && src[*io] == ';') (*io)++;
+  *io = namespace_end_after_body(src, len, body_end);
   free(name);
   return true;
 }
