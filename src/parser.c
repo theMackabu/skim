@@ -1,6 +1,12 @@
+#include "ast.h"
+#include "chars.h"
+#include "decl.h"
+#include "skip.h"
+#include "str.h"
 #include "syntax.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 static void
 push_item(skim_ast_program_t *program, skim_ast_item_kind_t kind, size_t start, size_t content_start, size_t end) {

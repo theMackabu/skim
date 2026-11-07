@@ -1,6 +1,10 @@
-#include "skim_internal.h"
+#include "chars.h"
+#include "class_internal.h"
+#include "emit.h"
+#include "skip.h"
+#include "str.h"
+#include "typescript.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,927 +34,6 @@ static bool modifier_at(const char *src, size_t len, size_t i, const char **word
   return false;
 }
 
-static bool class_member_modifier_at(
-  const char *src,
-  size_t len,
-  size_t i,
-  const char **word,
-  size_t *word_len,
-  bool *is_abstract
-) {
-  static const char *mods[] = {
-    "public", "private", "protected", "readonly", "override", "static", "accessor", "declare", "abstract"
-  };
-  for (size_t k = 0; k < sizeof(mods) / sizeof(mods[0]); k++) {
-    if (skim_word_at(src, len, i, mods[k])) {
-      *word = mods[k];
-      *word_len = strlen(mods[k]);
-      *is_abstract = strcmp(mods[k], "abstract") == 0;
-      return true;
-    }
-  }
-  return false;
-}
-
-static size_t skip_class_type_tail(const char *src, size_t len, size_t i) {
-  int paren = 0, bracket = 0, brace = 0, angle = 0;
-  bool seen_type_token = false;
-  while (i < len) {
-    char c = src[i];
-    if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token) break;
-    if (skim_is_space(c)) {
-      i++;
-      continue;
-    }
-    if (c == '\'' || c == '"' || c == '`') {
-      seen_type_token = true;
-      i = skim_skip_string_raw(src, len, i);
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      if (paren == 0 && bracket == 0 && brace == 0 && angle == 0) break;
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i = skim_skip_block_comment(src, len, i + 2);
-      continue;
-    }
-    if (c == '(') paren++;
-    else if (c == ')' && paren-- <= 0) break;
-    else if (c == '[') bracket++;
-    else if (c == ']' && bracket-- <= 0) break;
-    else if (c == '{') {
-      if (paren == 0 && bracket == 0 && angle == 0 && brace == 0 && seen_type_token) break;
-      brace++;
-    } else if (c == '}' && brace-- <= 0) break;
-    else if (c == '<') angle++;
-    else if (c == '>' && angle > 0) angle--;
-    else if (c == '=' && i + 1 < len && src[i + 1] == '>') {
-      i += 2;
-      seen_type_token = true;
-      continue;
-    } else if (paren == 0 && bracket == 0 && brace == 0 && angle == 0) {
-      if (c == ';' || c == '=') break;
-    }
-    seen_type_token = true;
-    i++;
-  }
-  return i;
-}
-
-static size_t skip_class_index_signature_tail(const char *src, size_t len, size_t i) {
-  int paren = 0, bracket = 0, brace = 0, angle = 0;
-  bool seen_type_token = false;
-  while (i < len) {
-    char c = src[i];
-    if (paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token) {
-      const char *mod = NULL;
-      size_t mod_len = 0;
-      bool is_abstract = false;
-      if (class_member_modifier_at(src, len, i, &mod, &mod_len, &is_abstract)) return i;
-    }
-    if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && angle == 0 && seen_type_token) return i;
-    if (c == '\'' || c == '"' || c == '`') {
-      seen_type_token = true;
-      i = skim_skip_string_raw(src, len, i);
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '/') {
-      if (paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i;
-      i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
-      continue;
-    }
-    if (i + 1 < len && c == '/' && src[i + 1] == '*') {
-      i = skim_skip_block_comment(src, len, i + 2);
-      continue;
-    }
-    if (c == '(') paren++;
-    else if (c == ')' && paren > 0) paren--;
-    else if (c == '[') bracket++;
-    else if (c == ']' && bracket > 0) bracket--;
-    else if (c == '{') brace++;
-    else if (c == '}' && brace > 0) brace--;
-    else if (c == '<') angle++;
-    else if (c == '>' && angle > 0) angle--;
-    else if (c == ';' && paren == 0 && bracket == 0 && brace == 0 && angle == 0) return i + 1;
-    if (!skim_is_space(c)) seen_type_token = true;
-    i++;
-  }
-  return i;
-}
-
-static size_t skip_class_member_name(const char *src, size_t len, size_t i) {
-  i = skim_skip_ws_comments(src, len, i);
-  if (i >= len) return i;
-  if (src[i] == '[') return skim_skip_balanced(src, len, i, '[', ']');
-  if (src[i] == '\'' || src[i] == '"' || src[i] == '`') return skim_skip_string_raw(src, len, i);
-  if (skim_is_digit(src[i])) {
-    while (i < len && (skim_is_digit(src[i]) || src[i] == '.'))
-      i++;
-    return i;
-  }
-  if (src[i] == '#') i++;
-  size_t start = 0, end = 0;
-  size_t after = skim_parse_identifier(src, len, i, &start, &end);
-  return start != end ? after : i;
-}
-
-static bool bracket_contains_type_colon(const char *src, size_t len, size_t i) {
-  if (i >= len || src[i] != '[') return false;
-  int depth = 0;
-  int paren = 0, brace = 0;
-  int ternary = 0;
-  for (size_t j = i; j < len; j++) {
-    if (src[j] == '\'' || src[j] == '"' || src[j] == '`') {
-      j = skim_skip_string_raw(src, len, j) - 1;
-      continue;
-    }
-    if (src[j] == '(') paren++;
-    else if (src[j] == ')' && paren > 0) paren--;
-    else if (src[j] == '{') brace++;
-    else if (src[j] == '}' && brace > 0) brace--;
-    else if (src[j] == '[') depth++;
-    else if (src[j] == ']') {
-      depth--;
-      if (depth == 0) return false;
-    } else if (src[j] == '?' && depth == 1 && paren == 0 && brace == 0) {
-      ternary++;
-    } else if (src[j] == ':' && depth == 1 && paren == 0 && brace == 0) {
-      if (ternary > 0) {
-        ternary--;
-        continue;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-static size_t skip_class_angle_type_list(const char *src, size_t len, size_t i) {
-  int depth = 0;
-  int paren = 0, bracket = 0, brace = 0;
-  while (i < len) {
-    if (!skim_char_has(src[i], SKIM_CC_ANGLE)) {
-      i++;
-      continue;
-    }
-    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-      i = skim_skip_string_raw(src, len, i);
-      continue;
-    }
-    if (src[i] == '(') paren++;
-    else if (src[i] == ')' && paren > 0) paren--;
-    else if (src[i] == '[') bracket++;
-    else if (src[i] == ']' && bracket > 0) bracket--;
-    else if (src[i] == '{') brace++;
-    else if (src[i] == '}' && brace > 0) brace--;
-    else if (src[i] == '=' && i + 1 < len && src[i + 1] == '>') i++;
-    else if (src[i] == '<') depth++;
-    else if (src[i] == '>' && depth > 0) {
-      if (depth > 1) {
-        depth--;
-      } else if (paren == 0 && bracket == 0 && brace == 0) {
-        depth--;
-        return i + 1;
-      }
-    }
-    i++;
-  }
-  return i;
-}
-
-static size_t skip_decorator_line(const char *src, size_t len, size_t i) {
-  if (i >= len || src[i] != '@') return i;
-  i++;
-  i = skim_skip_ws(src, len, i);
-  if (i < len && src[i] == '(') {
-    i = skim_skip_balanced(src, len, i, '(', ')');
-    size_t call = skim_skip_ws(src, len, i);
-    if (call < len && src[call] == '(') i = skim_skip_balanced(src, len, call, '(', ')');
-    return i;
-  }
-
-  size_t start = 0, end = 0;
-  i = skim_parse_identifier(src, len, i, &start, &end);
-  if (start == end) return i;
-
-  for (;;) {
-    size_t j = skim_skip_ws(src, len, i);
-    if (skim_range_has_newline(src, i, j)) break;
-    if (j >= len) break;
-    if (src[j] == '<') {
-      i = skip_class_angle_type_list(src, len, j);
-      continue;
-    }
-    if (src[j] == '!') {
-      i = j + 1;
-      continue;
-    }
-    if (src[j] == '.') {
-      size_t next_start = 0, next_end = 0;
-      size_t next = skim_parse_identifier(src, len, j + 1, &next_start, &next_end);
-      if (next_start == next_end) break;
-      i = next;
-      continue;
-    }
-    if (j + 1 < len && src[j] == '?' && src[j + 1] == '.') {
-      size_t next = j + 2;
-      if (next < len && src[next] == '[') {
-        i = skim_skip_balanced(src, len, next, '[', ']');
-        continue;
-      }
-      size_t next_start = 0, next_end = 0;
-      next = skim_parse_identifier(src, len, next, &next_start, &next_end);
-      if (next_start == next_end) break;
-      i = next;
-      continue;
-    }
-    if (src[j] == '[') {
-      i = skim_skip_balanced(src, len, j, '[', ']');
-      continue;
-    }
-    if (src[j] == '(') {
-      i = skim_skip_balanced(src, len, j, '(', ')');
-      continue;
-    }
-    break;
-  }
-  return i;
-}
-
-static bool looks_like_class_member_start(const char *src, size_t i) {
-  while (i > 0 && (src[i - 1] == ' ' || src[i - 1] == '\t'))
-    i--;
-  if (i == 0) return true;
-  char c = src[i - 1];
-  return c == '{' || c == '}' || c == ';' || c == '\n' || c == '\r';
-}
-
-static bool class_modifier_word_used_as_method_name(const char *src, size_t len, size_t i) {
-  static const char *words[] = {"public", "private", "protected", "readonly", "override", "accessor"};
-  for (size_t w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
-    if (!skim_word_at(src, len, i, words[w])) continue;
-    size_t j = skim_skip_ws_comments(src, len, i + strlen(words[w]));
-    return j < len && src[j] == '(';
-  }
-  return false;
-}
-
-static bool class_modifier_word_used_as_field_name(const char *src, size_t len, size_t i, size_t end) {
-  static const char *words[] = {"public", "private", "protected", "readonly", "override", "accessor"};
-  if (!looks_like_class_member_start(src, i)) return false;
-  for (size_t w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
-    if (!skim_word_at(src, len, i, words[w])) continue;
-    size_t j = i + strlen(words[w]);
-    bool saw_newline = false;
-    while (j < end && skim_is_space(src[j])) {
-      saw_newline = saw_newline || src[j] == '\n' || src[j] == '\r';
-      j++;
-    }
-    return j >= end || saw_newline || src[j] == '}' || src[j] == ';' || src[j] == '=';
-  }
-  return false;
-}
-
-static bool class_keyword_used_as_field_name(const char *src, size_t len, size_t i) {
-  static const char *words[] = {
-    "abstract",
-    "class",
-    "const",
-    "declare",
-    "enum",
-    "export",
-    "function",
-    "implements",
-    "import",
-    "interface",
-    "module",
-    "namespace",
-    "type"
-  };
-  if (!looks_like_class_member_start(src, i)) return false;
-  for (size_t w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
-    if (!skim_word_at(src, len, i, words[w])) continue;
-    size_t j = skim_skip_ws_comments(src, len, i + strlen(words[w]));
-    return j < len && (src[j] == ';' || src[j] == '=');
-  }
-  return false;
-}
-
-static char out_prev_non_ws(const skim_str_t *out) {
-  size_t i = out->len;
-  while (i > 0 && skim_is_space(out->data[i - 1]))
-    i--;
-  return i > 0 ? out->data[i - 1] : '\0';
-}
-
-static bool class_semicolon_is_empty_element(const skim_str_t *out) {
-  char prev = out_prev_non_ws(out);
-  return prev == '\0' || prev == '{' || prev == ';';
-}
-
-static bool class_prev_needs_member_separator(const skim_str_t *out) {
-  char prev = out_prev_non_ws(out);
-  return prev != '\0' && prev != '{' && prev != '}' && prev != ';';
-}
-
-static bool next_looks_like_class_member(const char *src, size_t len, size_t i, size_t end) {
-  i = skim_skip_ws_comments(src, len, i);
-  if (i >= end) return false;
-  if (
-    src[i] == '@' || src[i] == '[' || src[i] == '#' || src[i] == '*' || src[i] == '\'' || src[i] == '"' ||
-    src[i] == '`' || skim_is_digit(src[i])
-  )
-    return true;
-  if (!skim_is_id_start(src[i])) return false;
-  size_t name_start = 0, name_end = 0;
-  size_t after = skim_parse_identifier(src, len, i, &name_start, &name_end);
-  if (name_start == name_end) return false;
-  after = skim_skip_ws_comments(src, len, after);
-  return after < len && (after < end || src[after] == '}');
-}
-
-static void emit_decorator_range(skim_str_t *out, const char *src, size_t len, size_t start, size_t end) {
-  for (size_t i = start; i < end;) {
-    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-      i = skim_copy_string(out, src, len, i);
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      i = skim_copy_line_comment(out, src, len, i);
-      continue;
-    }
-    if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-      i = skim_copy_block_comment(out, src, len, i);
-      continue;
-    }
-    if (src[i] == '<') {
-      size_t after = skip_class_angle_type_list(src, len, i);
-      if (after > i && after <= end) {
-        i = after;
-        continue;
-      }
-    }
-    if (src[i] == '!' && (i + 1 >= len || src[i + 1] != '=')) {
-      i++;
-      continue;
-    }
-    if (src[i] != '@' && skim_transform_try_at(out, src, len, &i)) continue;
-    skim_str_putc(out, src[i++]);
-  }
-}
-
-static void emit_preserved_class_member_prefix(
-  skim_str_t *out,
-  const char *src,
-  size_t len,
-  size_t start,
-  size_t decorators_end,
-  size_t member_prefix_start,
-  bool saw_static,
-  bool saw_async,
-  bool saw_override,
-  bool saw_accessor
-) {
-  size_t leading = start;
-  if (decorators_end > start) {
-    emit_decorator_range(out, src, len, start, decorators_end);
-    leading = decorators_end;
-  }
-  while (leading < member_prefix_start && skim_is_space(src[leading])) {
-    skim_str_putc(out, src[leading++]);
-  }
-  if (saw_static) skim_str_puts(out, "static ");
-  if (saw_async) skim_str_puts(out, "async ");
-  if (saw_override && saw_accessor) skim_str_puts(out, "override ");
-  if (saw_accessor) skim_str_puts(out, "accessor ");
-}
-
-static bool try_consume_following_class_type_member(
-  skim_str_t *out,
-  const char *src,
-  size_t len,
-  size_t end,
-  size_t stmt_end,
-  size_t *io
-) {
-  size_t next_member = skim_skip_ws_comments(src, len, stmt_end);
-  const char *next_mod = NULL;
-  size_t next_mod_len = 0;
-  bool next_abstract = false;
-  bool saw_next_modifier = false;
-  while (next_member < end &&
-         class_member_modifier_at(src, len, next_member, &next_mod, &next_mod_len, &next_abstract)) {
-    saw_next_modifier = true;
-    next_member = skim_skip_ws_comments(src, len, next_member + next_mod_len);
-  }
-  if (!saw_next_modifier || next_member >= end) return false;
-
-  if (bracket_contains_type_colon(src, len, next_member)) {
-    size_t next_bracket_end = skip_class_member_name(src, len, next_member);
-    size_t next_colon = skim_skip_ws_comments(src, len, next_bracket_end);
-    if (next_colon < end && src[next_colon] == ':') {
-      *io = skip_class_index_signature_tail(src, len, next_colon + 1);
-      return true;
-    }
-  }
-
-  size_t next_name_start = next_member;
-  size_t next_name_end = skip_class_member_name(src, len, next_member);
-  if (next_name_end <= next_name_start) return false;
-
-  size_t after_next_name = skim_skip_ws_comments(src, len, next_name_end);
-  if (after_next_name >= end || src[after_next_name] != ':') return false;
-
-  size_t next_type_end = skip_class_type_tail(src, len, after_next_name + 1);
-  next_type_end = skim_skip_ws_comments(src, len, next_type_end);
-  skim_str_putn(out, src + next_name_start, next_name_end - next_name_start);
-  if (next_type_end < end && src[next_type_end] == ';') {
-    skim_str_putc(out, ';');
-    next_type_end++;
-  }
-  *io = next_type_end;
-  return true;
-}
-
-static bool
-try_remove_class_type_member(skim_str_t *out, const char *src, size_t len, size_t i, size_t end, size_t *io) {
-  if (!looks_like_class_member_start(src, i)) return false;
-  size_t j = i;
-  size_t decorators_end = i;
-  bool saw_abstract = false;
-  bool saw_declare = false;
-  bool saw_static = false;
-  bool saw_async = false;
-  bool saw_override = false;
-  bool saw_accessor = false;
-  bool saw_erased_modifier = false;
-  for (;;) {
-    j = skim_skip_ws_comments(src, len, j);
-    if (j >= end || src[j] != '@') break;
-    size_t after = skip_decorator_line(src, len, j);
-    if (after <= j) break;
-    decorators_end = after;
-    j = after;
-  }
-  for (;;) {
-    const char *mod = NULL;
-    size_t mod_len = 0;
-    bool is_abstract = false;
-    j = skim_skip_ws_comments(src, len, j);
-    if (class_modifier_word_used_as_method_name(src, len, j)) break;
-    if (!class_member_modifier_at(src, len, j, &mod, &mod_len, &is_abstract)) break;
-    if (strcmp(mod, "accessor") == 0 && saw_accessor) break;
-    saw_abstract = saw_abstract || is_abstract;
-    saw_declare = saw_declare || strcmp(mod, "declare") == 0;
-    saw_static = saw_static || strcmp(mod, "static") == 0;
-    saw_override = saw_override || strcmp(mod, "override") == 0;
-    saw_accessor = saw_accessor || strcmp(mod, "accessor") == 0;
-    saw_erased_modifier = saw_erased_modifier || (strcmp(mod, "static") != 0 && strcmp(mod, "accessor") != 0);
-    j += mod_len;
-  }
-  j = skim_skip_ws_comments(src, len, j);
-  if (skim_word_at(src, len, j, "async")) {
-    size_t after_async = skim_skip_ws_comments(src, len, j + 5);
-    if (
-      after_async < end &&
-      (src[after_async] == '*' || src[after_async] == '[' || src[after_async] == '#' ||
-       skim_is_id_start(src[after_async]))
-    ) {
-      saw_async = true;
-      j = after_async;
-    }
-  }
-  size_t member_prefix_start = j;
-  if (j < end && src[j] == '*') j = skim_skip_ws_comments(src, len, j + 1);
-
-  bool computed_type_member = j < end && bracket_contains_type_colon(src, len, j);
-  j = skip_class_member_name(src, len, j);
-  if (j >= end || j == i || j == member_prefix_start) return false;
-  size_t first_name_end = j;
-  size_t after_first_name = skim_skip_ws_comments(src, len, first_name_end);
-  if (
-    (first_name_end - member_prefix_start == 3 && memcmp(src + member_prefix_start, "get", 3) == 0) ||
-    (first_name_end - member_prefix_start == 3 && memcmp(src + member_prefix_start, "set", 3) == 0)
-  ) {
-    if (
-      after_first_name < end && src[after_first_name] != '(' && src[after_first_name] != ':' &&
-      src[after_first_name] != ';' && src[after_first_name] != '='
-    ) {
-      size_t property_end = skip_class_member_name(src, len, after_first_name);
-      if (property_end > after_first_name) j = property_end;
-    }
-  }
-  size_t member_name_end = j;
-  j = skim_skip_ws_comments(src, len, j);
-  if (j < end && (src[j] == '?' || src[j] == '!')) j = skim_skip_ws_comments(src, len, j + 1);
-  if (j < end && src[j] == '<') j = skip_class_angle_type_list(src, len, j);
-  j = skim_skip_ws_comments(src, len, j);
-
-  if (saw_declare) {
-    size_t stmt_end = skim_skip_statement_like(src, len, j);
-    if (stmt_end > end) stmt_end = end;
-    skim_emit_preserved_newlines(out, src, i, stmt_end);
-    if (try_consume_following_class_type_member(out, src, len, end, stmt_end, io)) return true;
-    *io = stmt_end;
-    return true;
-  }
-
-  if (computed_type_member) {
-    size_t stmt_end = j;
-    if (j < end && src[j] == ':') {
-      stmt_end = skip_class_index_signature_tail(src, len, j + 1);
-      size_t semi = skim_skip_ws_comments(src, len, stmt_end);
-      if (semi < end && src[semi] == ';') stmt_end = semi + 1;
-    } else {
-      stmt_end = skim_skip_statement_like(src, len, j);
-    }
-    if (stmt_end > end) stmt_end = end;
-    skim_emit_preserved_newlines(out, src, i, stmt_end);
-    if (try_consume_following_class_type_member(out, src, len, end, stmt_end, io)) return true;
-    *io = stmt_end;
-    return true;
-  }
-
-  if (j < end && src[j] == '(') {
-    size_t params_open = j;
-    if (params_open == member_prefix_start) return false;
-    size_t params_after = skim_skip_balanced(src, len, j, '(', ')');
-    size_t params_close = params_after > params_open ? params_after - 1 : params_open;
-    j = params_after;
-    size_t after_params = j;
-    j = skim_skip_ws_comments(src, len, j);
-    if (j < end && src[j] == ':') j = skim_skip_ws_comments(src, len, skip_class_type_tail(src, len, j + 1));
-    if (saw_abstract) {
-      size_t stmt_end =
-        j < end && src[j] == '{' ? skim_skip_balanced(src, len, j, '{', '}') : skim_skip_statement_like(src, len, j);
-      if (stmt_end > end) stmt_end = end;
-      if (stmt_end < end && src[stmt_end] == ';') stmt_end++;
-      skim_emit_preserved_newlines(out, src, i, stmt_end);
-      *io = stmt_end;
-      return true;
-    }
-    if (j < end && src[j] == ';') {
-      skim_emit_preserved_newlines(out, src, i, j + 1);
-      *io = j + 1;
-      return true;
-    }
-    if (j < end && src[j] != '{' && skim_range_has_newline(src, after_params, j)) {
-      skim_emit_preserved_newlines(out, src, i, j);
-      *io = j;
-      return true;
-    }
-    if (j < end && src[j] == '{') {
-      emit_preserved_class_member_prefix(
-        out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
-      );
-      size_t prefix_end = member_name_end;
-      while (prefix_end > member_prefix_start && skim_is_space(src[prefix_end - 1]))
-        prefix_end--;
-      if (prefix_end > member_prefix_start && (src[prefix_end - 1] == '?' || src[prefix_end - 1] == '!')) prefix_end--;
-      bool has_computed_name = false;
-      for (size_t k = member_prefix_start; k < prefix_end; k++) {
-        if (src[k] == '[') {
-          has_computed_name = true;
-          break;
-        }
-      }
-      if (has_computed_name) skim_transform_range(src, len, member_prefix_start, prefix_end, out);
-      else skim_str_putn(out, src + member_prefix_start, prefix_end - member_prefix_start);
-      skim_str_putc(out, '(');
-      skim_transform_range(src, len, params_open + 1, params_close, out);
-      skim_str_putc(out, ')');
-      skim_transform_range(src, len, params_after, j, out);
-      *io = j;
-      return true;
-    }
-    return false;
-  }
-
-  if (j < end && src[j] == ':') {
-    size_t colon = j;
-    size_t type_end = skip_class_type_tail(src, len, j + 1);
-    j = skim_skip_ws_comments(src, len, type_end);
-    if ((saw_abstract || saw_declare) && j < end && src[j] == ';') {
-      skim_emit_preserved_newlines(out, src, i, j + 1);
-      *io = j + 1;
-      return true;
-    }
-    if (!saw_abstract) {
-      if (saw_declare) {
-        size_t stmt_end = skim_skip_statement_like(src, len, j);
-        if (stmt_end > end) stmt_end = end;
-        skim_emit_preserved_newlines(out, src, i, stmt_end);
-        *io = stmt_end;
-        return true;
-      }
-      if (j < end && src[j] == '=') {
-        size_t stmt_end = skim_skip_statement_like(src, len, j);
-        if (stmt_end > end) stmt_end = end;
-        if (saw_static || saw_accessor) {
-          emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
-          );
-          skim_transform_range(src, len, member_prefix_start, colon, out);
-        } else {
-          skim_transform_range(src, len, i, colon, out);
-        }
-        skim_transform_range(src, len, j, stmt_end, out);
-        *io = stmt_end;
-        return true;
-      }
-      if (j < end && src[j] == ';') {
-        if (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) {
-          skim_emit_preserved_newlines(out, src, i, j + 1);
-          *io = j + 1;
-          return true;
-        }
-        if (saw_static || saw_accessor) {
-          emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
-          );
-          skim_transform_range(src, len, member_prefix_start, colon, out);
-        } else {
-          skim_transform_range(src, len, i, colon, out);
-        }
-        skim_str_putc(out, ';');
-        skim_emit_preserved_newlines(out, src, colon, j + 1);
-        *io = j + 1;
-        return true;
-      }
-      if (type_end < end && ((src[type_end] == '\n' || src[type_end] == '\r') || skim_range_has_newline(src, type_end, j))) {
-        if (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) {
-          skim_emit_preserved_newlines(out, src, i, type_end);
-          *io = type_end;
-          return true;
-        }
-        if (saw_static || saw_accessor) {
-          emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
-          );
-          skim_transform_range(src, len, member_prefix_start, colon, out);
-        } else {
-          skim_transform_range(src, len, i, colon, out);
-        }
-        skim_str_putc(out, ';');
-        *io = type_end;
-        return true;
-      }
-      if (type_end >= end || j >= end) {
-        if (skim_options.remove_class_fields_without_initializer || skim_options.allow_declare_fields_false) {
-          skim_emit_preserved_newlines(out, src, i, end);
-          *io = end;
-          return true;
-        }
-        if (saw_static || saw_accessor) {
-          emit_preserved_class_member_prefix(
-            out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
-          );
-          skim_transform_range(src, len, member_prefix_start, colon, out);
-        } else {
-          skim_transform_range(src, len, i, colon, out);
-        }
-        skim_str_putc(out, ';');
-        *io = end;
-        return true;
-      }
-    }
-  } else if ((saw_abstract || saw_declare) && j < end && src[j] == ';') {
-    skim_emit_preserved_newlines(out, src, i, j + 1);
-    *io = j + 1;
-    return true;
-  } else if (saw_erased_modifier && j < end && src[j] == '=') {
-    size_t stmt_end = skim_skip_statement_like(src, len, j);
-    if (stmt_end > end) stmt_end = end;
-    emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
-    );
-    skim_transform_range(src, len, member_prefix_start, stmt_end, out);
-    *io = stmt_end;
-    return true;
-  } else if (saw_erased_modifier && (j >= end || src[j] == ';' || src[j] == '\n' || src[j] == '\r' || src[j] == '}')) {
-    emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, saw_accessor
-    );
-    skim_transform_range(src, len, member_prefix_start, member_name_end, out);
-    if (j < end && src[j] == ';') {
-      skim_str_putc(out, ';');
-      j++;
-    }
-    *io = j;
-    return true;
-  } else if (saw_accessor && (j >= end || src[j] == ';' || src[j] == '\n' || src[j] == '\r' || src[j] == '}')) {
-    emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, true
-    );
-    skim_transform_range(src, len, member_prefix_start, member_name_end, out);
-    if (j < end && src[j] == ';') {
-      skim_str_putc(out, ';');
-      j++;
-    }
-    *io = j;
-    return true;
-  } else if (saw_accessor && j < end && src[j] == '=') {
-    size_t stmt_end = skim_skip_statement_like(src, len, j);
-    if (stmt_end > end) stmt_end = end;
-    emit_preserved_class_member_prefix(
-      out, src, len, i, decorators_end, member_prefix_start, saw_static, saw_async, saw_override, true
-    );
-    skim_transform_range(src, len, member_prefix_start, stmt_end, out);
-    *io = stmt_end;
-    return true;
-  }
-
-  return false;
-}
-
-static bool try_remove_literal_named_class_type_member(
-  skim_str_t *out,
-  const char *src,
-  size_t len,
-  size_t i,
-  size_t end,
-  size_t *io
-) {
-  if (!looks_like_class_member_start(src, i)) return false;
-  size_t name_end = i;
-  if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-    name_end = skim_skip_string_raw(src, len, i);
-  } else if (skim_is_digit(src[i])) {
-    while (name_end < end && (skim_is_digit(src[name_end]) || src[name_end] == '.'))
-      name_end++;
-  } else {
-    return false;
-  }
-  size_t colon = skim_skip_ws_comments(src, len, name_end);
-  if (colon >= end || src[colon] != ':') return false;
-  size_t type_start = skim_skip_ws_comments(src, len, colon + 1);
-  size_t type_end = skip_class_type_tail(src, len, colon + 1);
-  if (type_start < end && src[type_start] == '{') type_end = skim_skip_balanced(src, len, type_start, '{', '}');
-  size_t after_type = skim_skip_ws_comments(src, len, type_end);
-  if (after_type < end && src[after_type] == '=') {
-    size_t stmt_end = skim_skip_statement_like(src, len, after_type);
-    if (stmt_end > end) stmt_end = end;
-    skim_transform_range(src, len, i, colon, out);
-    skim_transform_range(src, len, after_type, stmt_end, out);
-    *io = stmt_end;
-    return true;
-  }
-  if (after_type < end && src[after_type] == ';') {
-    skim_transform_range(src, len, i, colon, out);
-    skim_str_putc(out, ';');
-    *io = after_type + 1;
-    return true;
-  }
-  if (
-    type_end < end && ((src[type_end] == '\n' || src[type_end] == '\r') || skim_range_has_newline(src, type_end, after_type))
-  ) {
-    skim_transform_range(src, len, i, colon, out);
-    skim_str_putc(out, ';');
-    *io = type_end;
-    return true;
-  }
-  return false;
-}
-
-static bool
-copy_class_body_common_token(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io, bool allow_ts) {
-  size_t i = *io;
-  if (skim_based_number_literal_at(src, len, i)) {
-    *io = skim_copy_based_number_literal(out, src, len, i, false);
-    return true;
-  }
-  if (skim_decimal_number_literal_at(src, len, i)) {
-    *io = skim_copy_decimal_number_literal(out, src, len, i, false);
-    return true;
-  }
-  if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-    *io = skim_copy_string(out, src, len, i);
-    return true;
-  }
-  if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-    *io = skim_copy_line_comment(out, src, len, i);
-    return true;
-  }
-  if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {
-    *io = skim_copy_block_comment(out, src, len, i);
-    return true;
-  }
-  if (src[i] == '/' && skim_slash_starts_regex(src, 0, i)) {
-    *io = skim_skip_regex_literal(src, end, i);
-    skim_str_putn(out, src + i, *io - i);
-    return true;
-  }
-  return allow_ts && src[i] != '@' && skim_transform_try_at(out, src, len, io);
-}
-
-static void
-copy_nested_class_body_token(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io, int *depth) {
-  size_t i = *io;
-  if (copy_class_body_common_token(out, src, len, end, io, true)) return;
-  if (src[i] == '{') (*depth)++;
-  else if (src[i] == '}') (*depth)--;
-  else if (skim_emit_copy_plain_identifier(out, src, end, io) || skim_emit_copy_plain_span(out, src, end, io)) return;
-  skim_str_putc(out, src[i]);
-  *io = i + 1;
-}
-
-static bool copy_class_top_level_space(skim_str_t *out, const char *src, size_t len, size_t end, size_t *io) {
-  size_t i = *io;
-  if (!skim_is_space(src[i])) return false;
-
-  size_t j = i;
-  bool has_newline = false;
-  while (j < end && skim_is_space(src[j])) {
-    has_newline = has_newline || src[j] == '\n' || src[j] == '\r';
-    j++;
-  }
-  if (has_newline && class_prev_needs_member_separator(out) && next_looks_like_class_member(src, len, j, end)) {
-    skim_str_putc(out, ';');
-  }
-  skim_str_putn(out, src + i, j - i);
-  *io = j;
-  return true;
-}
-
-static bool class_reserved_word_before_method_call(const char *src, size_t len, size_t i, size_t end) {
-  if (!skim_is_id_start(src[i])) return false;
-
-  size_t name_start = 0, name_end = 0;
-  size_t after_name = skim_parse_identifier(src, len, i, &name_start, &name_end);
-  size_t next = skim_skip_ws_comments(src, len, after_name);
-  if (name_start != i || next >= end || src[next] != '(') return false;
-
-  return skim_word_at(src, len, i, "class") || skim_word_at(src, len, i, "enum") ||
-         skim_word_at(src, len, i, "export") || skim_word_at(src, len, i, "function") ||
-         skim_word_at(src, len, i, "import") || skim_word_at(src, len, i, "interface") ||
-         skim_word_at(src, len, i, "module") || skim_word_at(src, len, i, "namespace") ||
-         skim_word_at(src, len, i, "type");
-}
-
-static void transform_class_body_range(const char *src, size_t len, size_t start, size_t end, skim_str_t *out) {
-  int depth = 0;
-  int paren_depth = 0;
-  int bracket_depth = 0;
-  for (size_t i = start; i < end;) {
-    if (depth > 0) {
-      copy_nested_class_body_token(out, src, len, end, &i, &depth);
-      continue;
-    }
-    if (paren_depth > 0 || bracket_depth > 0) {
-      if (copy_class_body_common_token(out, src, len, end, &i, true)) continue;
-      char c = src[i];
-      if (c == '(') paren_depth++;
-      else if (c == ')' && paren_depth > 0) paren_depth--;
-      else if (c == '[') bracket_depth++;
-      else if (c == ']' && bracket_depth > 0) bracket_depth--;
-      if (skim_emit_copy_plain_identifier(out, src, end, &i)) continue;
-      if (skim_emit_copy_plain_span(out, src, end, &i)) continue;
-      skim_str_putc(out, src[i++]);
-      continue;
-    }
-    if (copy_class_top_level_space(out, src, len, end, &i)) continue;
-    if (try_remove_class_type_member(out, src, len, i, end, &i)) continue;
-    if (try_remove_literal_named_class_type_member(out, src, len, i, end, &i)) continue;
-    if (copy_class_body_common_token(out, src, len, end, &i, false)) continue;
-    if (src[i] == ';') {
-      if (!class_semicolon_is_empty_element(out)) skim_str_putc(out, src[i]);
-      i++;
-      continue;
-    }
-    if (class_keyword_used_as_field_name(src, len, i)) {
-      skim_str_putc(out, src[i++]);
-      continue;
-    }
-    if (skim_word_at(src, len, i, "abstract")) {
-      i += 8;
-      continue;
-    }
-    if (class_modifier_word_used_as_method_name(src, len, i)) {
-      skim_str_putc(out, src[i++]);
-      continue;
-    }
-    if (class_modifier_word_used_as_field_name(src, len, i, end)) {
-      skim_str_putc(out, src[i++]);
-      continue;
-    }
-    if (class_reserved_word_before_method_call(src, len, i, end)) {
-      skim_str_putc(out, src[i++]);
-      continue;
-    }
-    if (src[i] != '@' && skim_transform_try_at(out, src, len, &i)) continue;
-    if (src[i] == '(') paren_depth++;
-    else if (src[i] == '[') bracket_depth++;
-    if (src[i] == '{') depth++;
-    skim_str_putc(out, src[i++]);
-  }
-}
-
 static void emit_class_header(
   skim_str_t *out,
   const char *src,
@@ -962,7 +45,7 @@ static void emit_class_header(
   if (prefix->is_export) skim_str_puts(out, "export ");
   if (prefix->is_default) skim_str_puts(out, "default ");
   if (prefix->has_decorators) {
-    emit_decorator_range(out, src, len, prefix->decorators_start, prefix->decorators_end);
+    skim_class_emit_decorator_range(out, src, len, prefix->decorators_start, prefix->decorators_end);
     skim_str_putc(out, ' ');
   }
   skim_str_putn(out, src + class_word, 5);
@@ -985,7 +68,7 @@ static void emit_class_header(
       }
     }
     if (i < body_open && src[i] == '<') {
-      i = skip_class_angle_type_list(src, len, i);
+      i = skim_class_skip_angle_type_list(src, len, i);
       continue;
     }
     if (skim_transform_try_at(out, src, len, &i)) continue;
@@ -1005,7 +88,7 @@ static void emit_normal_class(
   const class_prefix_t *prefix
 ) {
   emit_class_header(out, src, len, class_word, body_open, prefix);
-  transform_class_body_range(src, len, body_open + 1, body_close, out);
+  skim_class_transform_body_range(src, len, body_open + 1, body_close, out);
   skim_str_putc(out, src[body_close]);
 }
 
@@ -1023,7 +106,7 @@ static size_t find_class_body_open(const char *src, size_t len, size_t i) {
     else if (c == '[') bracket++;
     else if (c == ']' && bracket > 0) bracket--;
     else if (c == '<') {
-      i = skip_class_angle_type_list(src, len, i);
+      i = skim_class_skip_angle_type_list(src, len, i);
       continue;
     } else if (c == '{' && paren == 0 && bracket == 0) return i;
     i++;
@@ -1066,7 +149,7 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
       for (;;) {
         a = skim_skip_ws(src, len, a);
         if (a >= b || src[a] != '@') break;
-        size_t after = skip_decorator_line(src, len, a);
+        size_t after = skim_class_skip_decorator_line(src, len, a);
         if (after <= a || after > b) break;
         decorators_end = after;
         a = after;
@@ -1107,7 +190,7 @@ split_params(const char *src, size_t len, size_t start, size_t end, param_t **ou
 
         skim_str_t param = {0};
         if (decorators_end > decorators_start) {
-          emit_decorator_range(&param, src, len, decorators_start, decorators_end);
+          skim_class_emit_decorator_range(&param, src, len, decorators_start, decorators_end);
           skim_str_putc(&param, ' ');
         }
         skim_str_putn(&param, src + name_start, name_end - name_start);
@@ -1195,7 +278,7 @@ static bool scan_class_decorators(const char *src, size_t len, size_t *io, class
   for (;;) {
     j = skim_skip_ws_comments(src, len, j);
     if (j >= len || src[j] != '@') break;
-    size_t after = skip_decorator_line(src, len, j);
+    size_t after = skim_class_skip_decorator_line(src, len, j);
     if (after <= j) break;
     prefix->decorators_end = after;
     j = after;
@@ -1269,7 +352,7 @@ bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io)
         bool saw_ctor_modifier = false;
         for (;;) {
           after_mods = skim_skip_ws_comments(src, len, after_mods);
-          if (!class_member_modifier_at(src, len, after_mods, &mod, &mod_len, &is_abstract)) break;
+          if (!skim_class_member_modifier_at(src, len, after_mods, &mod, &mod_len, &is_abstract)) break;
           if (strcmp(mod, "static") == 0 || strcmp(mod, "accessor") == 0) break;
           saw_ctor_modifier = true;
           after_mods += mod_len;
@@ -1282,7 +365,7 @@ bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io)
         params_close = skim_skip_balanced(src, len, params_open, '(', ')') - 1;
         ctor_body_open = skim_skip_ws_comments(src, len, params_close + 1);
         if (ctor_body_open < len && src[ctor_body_open] == ':') {
-          ctor_body_open = skim_skip_ws_comments(src, len, skip_class_type_tail(src, len, ctor_body_open + 1));
+          ctor_body_open = skim_skip_ws_comments(src, len, skim_class_skip_type_tail(src, len, ctor_body_open + 1));
         }
         if (ctor_body_open < len && src[ctor_body_open] == '{') {
           found = true;
@@ -1328,7 +411,7 @@ bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io)
     skim_str_puts(out, params[p].name);
     skim_str_puts(out, ";\n");
   }
-  transform_class_body_range(src, len, body_open + 1, ctor_member_start ? ctor_member_start : ctor, out);
+  skim_class_transform_body_range(src, len, body_open + 1, ctor_member_start ? ctor_member_start : ctor, out);
   skim_str_puts(out, "constructor(");
   for (size_t p = 0; p < param_count; p++) {
     if (p) skim_str_puts(out, ", ");
@@ -1349,7 +432,7 @@ bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io)
   skim_transform_range(src, len, assignment_pos, ctor_body_close, out);
   skim_str_putc(out, '\n');
   skim_str_putc(out, src[ctor_body_close]);
-  transform_class_body_range(src, len, ctor_body_close + 1, body_close, out);
+  skim_class_transform_body_range(src, len, ctor_body_close + 1, body_close, out);
   skim_str_putc(out, src[body_close]);
 
   *io = body_close + 1;

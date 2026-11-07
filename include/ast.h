@@ -1,7 +1,7 @@
 #ifndef SKIM_AST_H
 #define SKIM_AST_H
 
-#include "skim_internal.h"
+#include "str.h"
 
 typedef enum {
   SKIM_AST_ITEM_TEXT,

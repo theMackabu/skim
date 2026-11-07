@@ -1,4 +1,8 @@
+#include "chars.h"
+#include "skip.h"
 #include "syntax.h"
+
+#include <string.h>
 
 static skim_syntax_keyword_t keyword_from_span(const char *src, size_t start, size_t end) {
   size_t n = end - start;

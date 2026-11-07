@@ -1,4 +1,8 @@
-#include "skim_internal.h"
+#include "chars.h"
+#include "skip.h"
+#include "transform.h"
+
+#include <string.h>
 
 static inline bool scan_skip_trivia_or_string(const char *src, size_t len, size_t *io) {
   size_t i = *io;

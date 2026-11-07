@@ -1,5 +1,6 @@
 #include "skim.h"
-#include "skim_internal.h"
+#include "str.h"
+#include "transform.h"
 
 #include <stdint.h>
 #include <stdlib.h>
