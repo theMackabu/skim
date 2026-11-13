@@ -56,6 +56,12 @@ static inline size_t skim_skip_ws(const char *src, size_t len, size_t i) {
   return i;
 }
 
+static inline char skim_prev_non_ws(const char *src, size_t i) {
+  while (i > 0 && skim_is_space(src[i - 1]))
+    i--;
+  return i > 0 ? src[i - 1] : '\0';
+}
+
 static inline size_t skim_skip_ws_comments_fast(const char *src, size_t len, size_t i) {
   if (i >= len || (!skim_is_space(src[i]) && src[i] != '/')) return i;
   return skim_skip_ws_comments(src, len, i);

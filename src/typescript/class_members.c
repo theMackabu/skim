@@ -321,20 +321,13 @@ static bool class_keyword_used_as_field_name(const char *src, size_t len, size_t
   return false;
 }
 
-static char out_prev_non_ws(const skim_str_t *out) {
-  size_t i = out->len;
-  while (i > 0 && skim_is_space(out->data[i - 1]))
-    i--;
-  return i > 0 ? out->data[i - 1] : '\0';
-}
-
 static bool class_semicolon_is_empty_element(const skim_str_t *out) {
-  char prev = out_prev_non_ws(out);
+  char prev = skim_prev_non_ws(out->data, out->len);
   return prev == '\0' || prev == '{' || prev == ';';
 }
 
 static bool class_prev_needs_member_separator(const skim_str_t *out) {
-  char prev = out_prev_non_ws(out);
+  char prev = skim_prev_non_ws(out->data, out->len);
   return prev != '\0' && prev != '{' && prev != '}' && prev != ';';
 }
 

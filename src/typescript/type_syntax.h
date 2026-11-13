@@ -16,10 +16,4 @@ bool skim_ts_colon_starts_type_annotation(const char *src, size_t len, size_t i)
 bool skim_ts_colon_is_in_var_decl(const char *src, size_t colon);
 bool skim_ts_colon_after_function_like_params(const char *src, size_t i);
 
-static inline char prev_non_ws_char(const char *src, size_t i) {
-  while (i > 0 && skim_is_space(src[i - 1]))
-    i--;
-  return i > 0 ? src[i - 1] : '\0';
-}
-
 #endif

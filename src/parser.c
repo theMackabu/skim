@@ -375,13 +375,6 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
   return i;
 }
 
-static char out_prev_non_ws(const skim_str_t *out) {
-  size_t i = out->len;
-  while (i > 0 && skim_is_space(out->data[i - 1]))
-    i--;
-  return i > 0 ? out->data[i - 1] : '\0';
-}
-
 static bool item_starts_statement_expression(const char *src, size_t len, size_t i) {
   i = skim_skip_ws_comments(src, len, i);
   if (i >= len) return false;
@@ -409,7 +402,7 @@ bool skim_syntax_item_needs_statement_semicolon(
   if (item->kind != SKIM_AST_ITEM_TEXT) return false;
   if (item_ends_in_line_comment(src, item->start, item->end)) return false;
   if (out_ends_in_line_comment(out)) return false;
-  char prev = out_prev_non_ws(out);
+  char prev = skim_prev_non_ws(out->data, out->len);
   if (prev == '\0' || prev == ';' || prev == '{') return false;
   size_t i = skim_skip_ws_comments(src, len, item->content_start);
   if (i >= len) return false;

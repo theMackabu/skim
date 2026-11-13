@@ -163,7 +163,7 @@ static bool value_object_scan(const char *src, size_t i, bool memo_active) {
 
 static bool colon_looks_like_value_object_property(const char *src, size_t i) {
   skim_object_scan_memo_t *memo = &skim_run->ts.object_memo;
-  if (prev_non_ws_char(src, i) == ')') return false;
+  if (skim_prev_non_ws(src, i) == ')') return false;
   if (!skim_scan_cache_owns(src)) return value_object_scan(src, i, false);
   if (memo->src != src) {
     memset(memo->pos_plus_one, 0, sizeof(memo->pos_plus_one));

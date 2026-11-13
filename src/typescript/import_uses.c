@@ -13,7 +13,7 @@
 #include <string.h>
 
 static bool colon_looks_like_value_object_property(const char *src, size_t colon) {
-  if (prev_non_ws(src, colon) == ')') return false;
+  if (skim_prev_non_ws(src, colon) == ')') return false;
 
   int paren = 0, bracket = 0, brace = 0;
   for (size_t k = colon; k > 0;) {
@@ -38,7 +38,7 @@ static bool colon_looks_like_value_object_property(const char *src, size_t colon
         char prev = src[before];
         if (prev == ':' && colon_looks_like_value_object_property(src, before)) return true;
         return prev == '=' || prev == '(' || prev == ',' || prev == '[' || prev == '?' ||
-               word_before_is(src, before + 1, "return") || word_before_is(src, before + 1, "yield");
+               skim_word_before(src, before + 1, "return") || skim_word_before(src, before + 1, "yield");
       }
     } else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) {
       return false;
@@ -83,14 +83,14 @@ bool skim_module_typeof_before_is_type_query(const char *src, size_t pos) {
   while (pos > 0 && skim_is_id_part(src[pos - 1]))
     pos--;
   if (end - pos != 6 || memcmp(src + pos, "typeof", 6) != 0) return false;
-  char prev = prev_non_ws(src, pos);
+  char prev = skim_prev_non_ws(src, pos);
   return prev == ':' || prev == '|' || prev == '&' || prev == '<';
 }
 
 bool skim_module_occurrence_is_type_position(const char *src, size_t len, size_t pos) {
   if (
-    word_before_is(src, pos, "as") || word_before_is(src, pos, "satisfies") || word_before_is(src, pos, "type") ||
-    word_before_is(src, pos, "interface") || skim_module_typeof_before_is_type_query(src, pos)
+    skim_word_before(src, pos, "as") || skim_word_before(src, pos, "satisfies") || skim_word_before(src, pos, "type") ||
+    skim_word_before(src, pos, "interface") || skim_module_typeof_before_is_type_query(src, pos)
   )
     return true;
   size_t prev_pos = prev_non_ws_pos(src, pos);
@@ -344,7 +344,7 @@ static void mark_import_specifier_list(
   size_t item_start = brace + 1;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
-    size_t a = trim_left(src, item_start, p);
+    size_t a = skim_skip_ws(src, p, item_start);
     size_t b = trim_right(src, a, p);
     if (a < b && !skim_module_specifier_is_explicit_type(src, a, b)) {
       size_t name_start = 0, name_end = 0;

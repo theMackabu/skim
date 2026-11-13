@@ -71,12 +71,12 @@ bool skim_module_statement_keyword_can_start_here(const char *src, size_t pos) {
     first++;
   if (first == pos) return true;
 
-  char prev = prev_non_ws(src, pos);
+  char prev = skim_prev_non_ws(src, pos);
   return prev == '\0' || prev == ';' || prev == '{' || prev == '}';
 }
 
 bool skim_module_type_statement_keyword_at(const char *src, size_t len, size_t pos) {
-  if (!skim_module_statement_keyword_can_start_here(src, pos) && !word_before_is(src, pos, "export")) return false;
+  if (!skim_module_statement_keyword_can_start_here(src, pos) && !skim_word_before(src, pos, "export")) return false;
   if (skim_word_at(src, len, pos, "type")) {
     size_t name_start = 0, name_end = 0;
     size_t after_name = skim_parse_identifier(src, len, skim_skip_ws_comments(src, len, pos + 4), &name_start, &name_end);
@@ -93,9 +93,9 @@ bool skim_module_type_statement_keyword_at(const char *src, size_t len, size_t p
 
 bool
 skim_module_local_name_span(const char *src, size_t start, size_t end, size_t *name_start, size_t *name_end) {
-  start = trim_left(src, start, end);
+  start = skim_skip_ws(src, end, start);
   end = trim_right(src, start, end);
-  if (skim_word_at(src, end, start, "type")) start = trim_left(src, start + 4, end);
+  if (skim_word_at(src, end, start, "type")) start = skim_skip_ws(src, end, start + 4);
   *name_start = *name_end = 0;
   for (size_t as_pos = start; as_pos < end; as_pos++) {
     if (skim_word_at(src, end, as_pos, "as")) {
@@ -114,7 +114,7 @@ char *skim_module_local_name_dup(const char *src, size_t start, size_t end) {
 }
 
 bool skim_module_specifier_is_explicit_type(const char *src, size_t start, size_t end) {
-  start = trim_left(src, start, end);
+  start = skim_skip_ws(src, end, start);
   return skim_word_at(src, end, start, "type");
 }
 

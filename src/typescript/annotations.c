@@ -381,9 +381,9 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
     size_t after_colon = skim_skip_ws(src, len, i + 1);
     if (skim_word_at(src, len, after_colon, "function")) return false;
     size_t end =
-      prev_non_ws_char(src, i) == ')' ? skim_ts_skip_return_type_tail(src, len, i + 1) : skim_ts_skip_type_tail(src, len, i + 1);
+      skim_prev_non_ws(src, i) == ')' ? skim_ts_skip_return_type_tail(src, len, i + 1) : skim_ts_skip_type_tail(src, len, i + 1);
     if (
-      after_colon < len && src[after_colon] == '{' && prev_non_ws_char(src, i) != ')' && skim_ts_colon_is_in_var_decl(src, i)
+      after_colon < len && src[after_colon] == '{' && skim_prev_non_ws(src, i) != ')' && skim_ts_colon_is_in_var_decl(src, i)
     ) {
       end = skim_skip_balanced(src, len, after_colon, '{', '}');
       for (;;) {
@@ -400,7 +400,7 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
       }
     }
     if (
-      after_colon < len && src[after_colon] == '(' && prev_non_ws_char(src, i) == ')' &&
+      after_colon < len && src[after_colon] == '(' && skim_prev_non_ws(src, i) == ')' &&
       !skim_ts_colon_after_function_like_params(src, i)
     ) {
       size_t after_params = skim_skip_ws(src, len, skim_skip_balanced(src, len, after_colon, '(', ')'));
@@ -452,9 +452,9 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
 
   if (
     skim_word_at(src, len, i, "as") && prev_non_ws_same_line_char(src, i) != '\n' &&
-    prev_non_ws_same_line_char(src, i) != '\r' && prev_non_ws_char(src, i) != '=' && prev_non_ws_char(src, i) != '(' &&
-    prev_non_ws_char(src, i) != '[' && prev_non_ws_char(src, i) != '{' && prev_non_ws_char(src, i) != ',' &&
-    prev_non_ws_char(src, i) != ';' && prev_non_ws_char(src, i) != ':' && prev_non_ws_char(src, i) != '*' &&
+    prev_non_ws_same_line_char(src, i) != '\r' && skim_prev_non_ws(src, i) != '=' && skim_prev_non_ws(src, i) != '(' &&
+    skim_prev_non_ws(src, i) != '[' && skim_prev_non_ws(src, i) != '{' && skim_prev_non_ws(src, i) != ',' &&
+    skim_prev_non_ws(src, i) != ';' && skim_prev_non_ws(src, i) != ':' && skim_prev_non_ws(src, i) != '*' &&
     !skim_word_before(src, i, "var") && !skim_word_before(src, i, "let") && !skim_word_before(src, i, "const") &&
     !skim_word_before(src, i, "function")
   ) {

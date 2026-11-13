@@ -12,8 +12,8 @@
 #include <string.h>
 
 static char *exported_binding_from_specifier(const char *src, size_t start, size_t end) {
-  start = trim_left(src, start, end);
-  if (skim_word_at(src, end, start, "type")) start = trim_left(src, start + 4, end);
+  start = skim_skip_ws(src, end, start);
+  if (skim_word_at(src, end, start, "type")) start = skim_skip_ws(src, end, start + 4);
   size_t name_start = 0, name_end = 0;
   skim_parse_identifier(src, end, start, &name_start, &name_end);
   if (name_start == name_end) return NULL;
@@ -143,7 +143,7 @@ static bool try_export_named(skim_str_t *out, const char *src, size_t len, size_
   size_t specifier_count = 0;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
-    size_t a = trim_left(src, item_start, p);
+    size_t a = skim_skip_ws(src, p, item_start);
     size_t b = trim_right(src, a, p);
     if (a < b) specifier_count++;
     if (a < b && !skim_module_specifier_is_explicit_type(src, a, b)) {
@@ -308,7 +308,7 @@ static bool identifier_has_external_value_use(
       bool type_position = skim_module_occurrence_is_type_position(src, len, i);
       if (
         !pos_in_import_equals_decl(decls, decl_count, i) && !pos_in_import_equals_statement(src, len, i) &&
-        !word_before_is(src, i, "import") && (!type_position || skim_module_typeof_before_is_type_query(src, i))
+        !skim_word_before(src, i, "import") && (!type_position || skim_module_typeof_before_is_type_query(src, i))
       )
         return true;
       i += n;
@@ -409,7 +409,7 @@ static void collect_specifier_bindings(
   size_t item_start = brace + 1;
   for (size_t p = brace + 1; p <= close - 1; p++) {
     if (p < close - 1 && src[p] != ',') continue;
-    size_t a = trim_left(src, item_start, p);
+    size_t a = skim_skip_ws(src, p, item_start);
     size_t b = trim_right(src, a, p);
     if (a < b && !skim_module_specifier_is_explicit_type(src, a, b)) {
       skim_module_push_import_binding(bindings, count, cap, skim_module_local_name_dup(src, a, b), a, b);

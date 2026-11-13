@@ -1,7 +1,7 @@
 #ifndef SKIM_TS_MODULE_INTERNAL_H
 #define SKIM_TS_MODULE_INTERNAL_H
 
-#include "chars.h"
+#include "skip.h"
 
 typedef struct {
   char *local;
@@ -13,35 +13,14 @@ typedef struct {
   bool later_decl;
 } import_binding_t;
 
-static inline size_t trim_left(const char *src, size_t i, size_t end) {
-  while (i < end && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r'))
-    i++;
-  return i;
-}
-
 static inline size_t trim_right(const char *src, size_t start, size_t end) {
-  while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\t' || src[end - 1] == '\n' || src[end - 1] == '\r'))
+  while (end > start && skim_is_space(src[end - 1]))
     end--;
   return end;
 }
 
-static inline bool word_before_is(const char *src, size_t pos, const char *word) {
-  while (pos > 0 && (src[pos - 1] == ' ' || src[pos - 1] == '\t' || src[pos - 1] == '\n' || src[pos - 1] == '\r'))
-    pos--;
-  size_t end = pos;
-  while (pos > 0 && skim_is_id_part(src[pos - 1]))
-    pos--;
-  return end > pos && strlen(word) == end - pos && memcmp(src + pos, word, end - pos) == 0;
-}
-
-static inline char prev_non_ws(const char *src, size_t pos) {
-  while (pos > 0 && (src[pos - 1] == ' ' || src[pos - 1] == '\t' || src[pos - 1] == '\n' || src[pos - 1] == '\r'))
-    pos--;
-  return pos > 0 ? src[pos - 1] : '\0';
-}
-
 static inline size_t prev_non_ws_pos(const char *src, size_t pos) {
-  while (pos > 0 && (src[pos - 1] == ' ' || src[pos - 1] == '\t' || src[pos - 1] == '\n' || src[pos - 1] == '\r'))
+  while (pos > 0 && skim_is_space(src[pos - 1]))
     pos--;
   return pos > 0 ? pos - 1 : (size_t)-1;
 }
