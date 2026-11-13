@@ -1,7 +1,5 @@
 #include "chars.h"
-#include "emit.h"
-#include "skip.h"
-#include "str.h"
+#include "print_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -317,7 +315,9 @@ size_t skim_copy_based_number_literal(skim_str_t *out, const char *src, size_t l
       return j + 1;
     }
     if (approx > 1.7976931348623157e308L) {
-      size_t next = skim_skip_ws(src, len, j);
+      size_t next = j;
+      while (next < len && skim_is_space(src[next]))
+        next++;
       if (next < len && src[next] == ':') skim_str_puts(out, "[Infinity]");
       else skim_str_puts(out, "Infinity");
     } else {

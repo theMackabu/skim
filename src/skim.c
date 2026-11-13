@@ -1,7 +1,5 @@
-#include "run.h"
 #include "skim.h"
-#include "str.h"
-#include "transform.h"
+#include "print.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -9,8 +7,9 @@
 
 typedef struct {
   skim_str_t output;
-  skim_str_t cleanup;
-  skim_run_t run;
+  skim_tokens_t tokens;
+  skim_ast_t ast;
+  skim_printer_t printer;
 } skim_context_impl_t;
 
 static void write_error(char *out, size_t out_len, const char *msg) {
@@ -96,17 +95,16 @@ void skim_context_reset(skim_context_t *ctx) {
   skim_context_impl_t *impl = context_impl(ctx);
   if (!impl) return;
   impl->output.len = 0;
-  impl->cleanup.len = 0;
   if (impl->output.data) impl->output.data[0] = '\0';
-  if (impl->cleanup.data) impl->cleanup.data[0] = '\0';
 }
 
 void skim_context_deinit(skim_context_t *ctx) {
   skim_context_impl_t *impl = context_impl(ctx);
   if (!impl) return;
   free(impl->output.data);
-  free(impl->cleanup.data);
-  skim_run_free(&impl->run);
+  skim_tokens_free(&impl->tokens);
+  skim_ast_free(&impl->ast);
+  skim_printer_free(&impl->printer);
   free(impl);
   ctx->impl = NULL;
 }
@@ -141,18 +139,25 @@ const char *skim_strip_typescript_borrowed(
     return NULL;
   }
 
-  skim_run_t *previous_run = skim_run;
-  impl->run.options = options ? *options : (skim_options_t){0};
-  impl->run.source_mode = resolve_source_mode(filename, source_mode);
-  skim_run = &impl->run;
-  skim_transform_typescript_into(input, input_len, &impl->output, &impl->cleanup);
-  skim_run = previous_run;
-
-  if (!impl->output.data) {
-    if (out_error) *out_error = SKIM_ERR_TRANSFORM_FAILED;
-    write_error(error_output, error_output_len, "failed to strip TypeScript");
+  if (input_len > UINT32_MAX - 16) {
+    if (out_error) *out_error = SKIM_ERR_OUTPUT_TOO_LARGE;
+    write_error(error_output, error_output_len, "source input is too large");
     return NULL;
   }
+
+  skim_options_t defaults = {0};
+  skim_lex(&impl->tokens, input, input_len);
+  skim_parse(&impl->tokens, &impl->ast, input);
+  skim_print(
+    &impl->printer,
+    input,
+    input_len,
+    &impl->tokens,
+    &impl->ast,
+    options ? options : &defaults,
+    resolve_source_mode(filename, source_mode),
+    &impl->output
+  );
 
   *out_len = impl->output.len;
   if (out_error) *out_error = SKIM_OK;

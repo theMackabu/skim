@@ -43,6 +43,7 @@ const cases = [
   ['mixed_import.ts', '42\n'],
   ['namespace.ts', '7\n'],
   ['namespace_exports.ts', '11 hi\n'],
+  ['namespace_export_vars.ts', '1 1 undefined 2 3,4 5 6 7 8 9 10 11 11\n'],
   ['non_null_optional.ts', 'yes 5\n'],
   ['object_property_modifier.ts', 'a.ts:true false 1 true\n'],
   ['parameter_property.ts', '9\n'],
