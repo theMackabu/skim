@@ -8,7 +8,7 @@ size_t skim_ts_skip_return_type_tail(const char *src, size_t len, size_t i);
 size_t skim_ts_skip_type_declaration_statement(const char *src, size_t len, size_t i);
 size_t skim_ts_skip_declare_function_statement(const char *src, size_t len, size_t i);
 size_t skim_ts_find_interface_body_or_semicolon(const char *src, size_t len, size_t i);
-size_t skim_ts_skip_angle_type_list(const char *src, size_t len, size_t i);
+size_t skim_ts_skip_angle_type_list(const char *src, size_t len, size_t i, bool strict);
 
 bool skim_colon_looks_like_ternary(const char *src, size_t colon);
 bool skim_colon_looks_like_case_label(const char *src, size_t colon);

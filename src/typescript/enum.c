@@ -127,30 +127,28 @@ static bool member_name_matches(const char *name, char **members, size_t member_
   return false;
 }
 
-static bool lookup_qualified_member_span(
-  const char *enum_name,
-  size_t enum_len,
-  const char *member_name,
-  size_t member_len,
-  enum_value_t *out
-) {
+static enum_known_member_t *
+find_known_member(const char *enum_name, size_t enum_len, const char *member_name, size_t member_len) {
   skim_enum_state_t *es = &skim_run->ts.enums;
   size_t *buckets = known_member_buckets();
   for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
        i = es->known_members[i].next_hash) {
     enum_known_member_t *m = &es->known_members[i];
-    if (m->enum_name_len != enum_len || m->member_name_len != member_len) continue;
-    if (memcmp(enum_name, m->enum_name, enum_len) != 0 || memcmp(member_name, m->member_name, member_len) != 0)
-      continue;
-    if (m->value.kind == ENUM_VALUE_UNKNOWN) return false;
-    *out = skim_enum_value_clone(m->value);
-    return true;
+    if (
+      m->enum_name_len == enum_len && m->member_name_len == member_len &&
+      memcmp(enum_name, m->enum_name, enum_len) == 0 && memcmp(member_name, m->member_name, member_len) == 0
+    ) {
+      return m;
+    }
   }
-  return false;
+  return NULL;
 }
 
 bool skim_enum_lookup_qualified_member(const char *enum_name, const char *member_name, enum_value_t *out) {
-  return lookup_qualified_member_span(enum_name, strlen(enum_name), member_name, strlen(member_name), out);
+  enum_known_member_t *m = find_known_member(enum_name, strlen(enum_name), member_name, strlen(member_name));
+  if (!m || m->value.kind == ENUM_VALUE_UNKNOWN) return false;
+  *out = skim_enum_value_clone(m->value);
+  return true;
 }
 
 static bool lookup_inline_member_span(
@@ -160,40 +158,17 @@ static bool lookup_inline_member_span(
   size_t member_len,
   enum_value_t *out
 ) {
-  skim_enum_state_t *es = &skim_run->ts.enums;
-  size_t *buckets = known_member_buckets();
-  for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
-       i = es->known_members[i].next_hash) {
-    enum_known_member_t *m = &es->known_members[i];
-    if (m->enum_name_len != enum_len || m->member_name_len != member_len) continue;
-    if (memcmp(enum_name, m->enum_name, enum_len) != 0 || memcmp(member_name, m->member_name, member_len) != 0)
-      continue;
-    if (!m->inline_ref || m->value.kind == ENUM_VALUE_UNKNOWN) return false;
-    *out = skim_enum_value_clone(m->value);
-    return true;
-  }
-  return false;
+  enum_known_member_t *m = find_known_member(enum_name, enum_len, member_name, member_len);
+  if (!m || !m->inline_ref || m->value.kind == ENUM_VALUE_UNKNOWN) return false;
+  *out = skim_enum_value_clone(m->value);
+  return true;
 }
 
 static bool known_enum_member_name(const char *enum_name, const char *member_name) {
-  skim_enum_state_t *es = &skim_run->ts.enums;
-  size_t enum_len = strlen(enum_name);
-  size_t member_len = strlen(member_name);
-  size_t *buckets = known_member_buckets();
-  for (size_t i = buckets[enum_member_hash(enum_name, enum_len, member_name, member_len)]; i != (size_t)-1;
-       i = es->known_members[i].next_hash) {
-    enum_known_member_t *m = &es->known_members[i];
-    if (
-      m->enum_name_len == enum_len && m->member_name_len == member_len &&
-      memcmp(enum_name, m->enum_name, enum_len) == 0 && memcmp(member_name, m->member_name, member_len) == 0
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return find_known_member(enum_name, strlen(enum_name), member_name, strlen(member_name)) != NULL;
 }
 
-static bool enum_name_has_value_use(const char *src, size_t len, size_t start, const char *name) {
+static bool enum_name_has_use(const char *src, size_t len, size_t start, const char *name, bool value_only) {
   size_t n = strlen(name);
   for (size_t i = start; i + n <= len;) {
     if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
@@ -205,52 +180,15 @@ static bool enum_name_has_value_use(const char *src, size_t len, size_t start, c
       memcmp(src + i, name, n) == 0 && (i == 0 || !skim_is_id_part(src[i - 1])) &&
       (i + n == len || !skim_is_id_part(src[i + n]))
     ) {
-      size_t before = i;
-      while (before > 0 && skim_is_space(src[before - 1]))
-        before--;
-      size_t word_end = before;
-      while (before > 0 && skim_is_id_part(src[before - 1]))
-        before--;
-      if (word_end > before && word_end - before == 4 && memcmp(src + before, "enum", 4) == 0) {
-        i += n;
-        continue;
+      bool skip = skim_word_before(src, i, "enum");
+      if (!skip && value_only) {
+        size_t j = skim_skip_ws(src, len, i + n);
+        if (j < len && src[j] == '?') j = skim_skip_ws(src, len, j + 1);
+        skip = j < len && (src[j] == '.' || src[j] == '[');
       }
-      size_t j = skim_skip_ws(src, len, i + n);
-      if (j < len && src[j] == '?') j = skim_skip_ws(src, len, j + 1);
-      if (j < len && (src[j] == '.' || src[j] == '[')) {
-        i += n;
-        continue;
-      }
-      return true;
-    }
-    i++;
-  }
-  return false;
-}
-
-static bool enum_name_has_any_use(const char *src, size_t len, size_t start, const char *name) {
-  size_t n = strlen(name);
-  for (size_t i = start; i + n <= len;) {
-    if (src[i] == '\'' || src[i] == '"' || src[i] == '`') {
-      i = skim_skip_string_raw(src, len, i);
+      if (!skip) return true;
+      i += n;
       continue;
-    }
-    if (skim_skip_comment(src, len, &i)) continue;
-    if (
-      memcmp(src + i, name, n) == 0 && (i == 0 || !skim_is_id_part(src[i - 1])) &&
-      (i + n == len || !skim_is_id_part(src[i + n]))
-    ) {
-      size_t before = i;
-      while (before > 0 && skim_is_space(src[before - 1]))
-        before--;
-      size_t word_end = before;
-      while (before > 0 && skim_is_id_part(src[before - 1]))
-        before--;
-      if (word_end > before && word_end - before == 4 && memcmp(src + before, "enum", 4) == 0) {
-        i += n;
-        continue;
-      }
-      return true;
     }
     i++;
   }
@@ -406,23 +344,6 @@ static bool known_enum_in_scope(const char *name, size_t scope_start) {
       return true;
   }
   return false;
-}
-
-static bool removed_enum_needs_empty_block(const char *src, size_t pos) {
-  while (pos > 0 && skim_is_space(src[pos - 1]))
-    pos--;
-  if (pos == 0) return false;
-  if (src[pos - 1] == ')') return true;
-  return false;
-}
-
-static bool removed_enum_after_else(const char *src, size_t pos) {
-  while (pos > 0 && skim_is_space(src[pos - 1]))
-    pos--;
-  size_t end = pos;
-  while (pos > 0 && skim_is_id_part(src[pos - 1]))
-    pos--;
-  return end - pos == 4 && memcmp(src + pos, "else", 4) == 0;
 }
 
 static void trim_trailing_else(skim_str_t *out) {
@@ -619,13 +540,13 @@ bool skim_ts_enum_try(skim_str_t *out, const char *src, size_t len, size_t *io) 
   }
   bool should_remove =
     (is_const &&
-     (skim_run->options.optimize_const_enums || (member_count == 0 && !enum_name_has_any_use(src, len, i, name)))) ||
-    (skim_run->options.optimize_enums && all_known && !is_export && !enum_name_has_value_use(src, len, i, name));
+     (skim_run->options.optimize_const_enums || (member_count == 0 && !enum_name_has_use(src, len, i, name, false)))) ||
+    (skim_run->options.optimize_enums && all_known && !is_export && !enum_name_has_use(src, len, i, name, true));
   if (should_remove) {
-    bool after_else = is_const && member_count == 0 && removed_enum_after_else(src, *io);
+    bool after_else = is_const && member_count == 0 && skim_word_before(src, *io, "else");
     if (after_else) trim_trailing_else(out);
     skim_emit_preserved_newlines(out, src, *io, i);
-    if (!after_else && is_const && member_count == 0 && removed_enum_needs_empty_block(src, *io))
+    if (!after_else && is_const && member_count == 0 && skim_prev_non_ws(src, *io) == ')')
       skim_str_puts(out, "{}");
   } else {
     if (skim_run->options.optimize_enums && is_export && !merge_assign) {

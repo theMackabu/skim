@@ -202,21 +202,6 @@ bool skim_ts_colon_is_in_var_decl(const char *src, size_t colon) {
   for (size_t p = line; p < colon; p++) {
     if (skim_word_any(src, colon, p, "var\0let\0const\0")) { return true; }
   }
-  for (size_t k = colon; k > 0;) {
-    char c = src[--k];
-    if (c == ';' || c == '{' || c == '}' || c == '\n' || c == '\r') return false;
-    if (skim_is_id_part(c)) {
-      size_t end = k + 1;
-      while (k > 0 && skim_is_id_part(src[k - 1]))
-        k--;
-      if (
-        (end - k == 3 && memcmp(src + k, "var", 3) == 0) || (end - k == 3 && memcmp(src + k, "let", 3) == 0) ||
-        (end - k == 5 && memcmp(src + k, "const", 5) == 0)
-      ) {
-        return true;
-      }
-    }
-  }
   return false;
 }
 

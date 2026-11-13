@@ -246,21 +246,8 @@ static bool item_ends_in_line_comment(const char *src, size_t start, size_t end)
   return false;
 }
 
-static bool out_ends_in_line_comment(const skim_str_t *out) {
-  size_t end = out->len;
-  while (end > 0 && (out->data[end - 1] == '\n' || out->data[end - 1] == '\r'))
-    end--;
-  size_t line = end;
-  while (line > 0 && out->data[line - 1] != '\n' && out->data[line - 1] != '\r')
-    line--;
-  for (size_t i = line; i + 1 < end; i++) {
-    if (out->data[i] == '/' && out->data[i + 1] == '/') return true;
-  }
-  return false;
-}
-
 static size_t variable_item_end(const char *src, size_t len, size_t i) {
-  int paren = 0, bracket = 0, brace = 0;
+  int paren = 0, bracket = 0;
   while (i < len) {
     char c = src[i];
     if (!skim_char_has(c, SKIM_CC_ITEM_END)) {
@@ -273,10 +260,9 @@ static size_t variable_item_end(const char *src, size_t len, size_t i) {
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '/') {
       size_t comment = i;
-      while (i < len && src[i] != '\n')
-        i++;
+      i = skim_skip_line_comment(src, len, i);
       if (
-        paren == 0 && bracket == 0 && brace == 0 && prev_allows_asi_item(src, comment) &&
+        paren == 0 && bracket == 0 && prev_allows_asi_item(src, comment) &&
         next_starts_asi_item(src, len, i + 1)
       )
         return i;
@@ -286,7 +272,7 @@ static size_t variable_item_end(const char *src, size_t len, size_t i) {
       i = skim_skip_block_comment(src, len, i + 2);
       continue;
     }
-    if (c == ':' && paren == 0 && bracket == 0 && brace == 0) {
+    if (c == ':' && paren == 0 && bracket == 0) {
       i = skip_ts_type_tail_for_item(src, len, i + 1);
       continue;
     }
@@ -297,15 +283,10 @@ static size_t variable_item_end(const char *src, size_t len, size_t i) {
     else if (c == '{') {
       i = skim_skip_balanced(src, len, i, '{', '}');
       continue;
-    } else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) {
+    } else if (c == ';' && paren == 0 && bracket == 0) {
       return i + 1;
-    } else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && prev_allows_asi_item(src, i)) {
-      size_t next = skim_skip_ws_comments(src, len, i + 1);
-      static const char item_words[] =
-        "var\0let\0const\0function\0class\0interface\0type\0enum\0namespace\0module\0export\0import\0";
-      if (next >= len || skim_word_any(src, len, next, item_words) || next_starts_asi_item(src, len, next)) {
-        return i;
-      }
+    } else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && prev_allows_asi_item(src, i)) {
+      if (next_starts_asi_item(src, len, i + 1)) return i;
     }
     i++;
   }
@@ -321,7 +302,7 @@ static bool item_is_variable_decl(const char *src, size_t len, size_t i) {
 static size_t text_item_end(const char *src, size_t len, size_t i) {
   bool starts_decorator = i < len && src[i] == '@';
   bool starts_export = skim_word_at(src, len, i, "export");
-  int paren = 0, bracket = 0, brace = 0;
+  int paren = 0, bracket = 0;
   while (i < len) {
     char c = src[i];
     if (!skim_char_has(c, SKIM_CC_ITEM_END)) {
@@ -334,14 +315,13 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '/') {
       size_t comment = i;
-      while (i < len && src[i] != '\n')
-        i++;
+      i = skim_skip_line_comment(src, len, i);
       if (starts_decorator || starts_export) {
         size_t next = skim_skip_ws_comments(src, len, i + 1);
         if (next < len && (src[next] == '@' || skim_word_any(src, len, next, "export\0class\0"))) { continue; }
       }
       if (
-        paren == 0 && bracket == 0 && brace == 0 && prev_allows_asi_item(src, comment) &&
+        paren == 0 && bracket == 0 && prev_allows_asi_item(src, comment) &&
         next_starts_asi_item(src, len, i + 1)
       )
         return i;
@@ -358,9 +338,9 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
     else if (c == '{') {
       i = skim_skip_balanced(src, len, i, '{', '}');
       continue;
-    } else if (c == ';' && paren == 0 && bracket == 0 && brace == 0) {
+    } else if (c == ';' && paren == 0 && bracket == 0) {
       return i + 1;
-    } else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && prev_allows_asi_item(src, i)) {
+    } else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && prev_allows_asi_item(src, i)) {
       if (starts_decorator || starts_export) {
         size_t next = skim_skip_ws_comments(src, len, i + 1);
         if (next < len && (src[next] == '@' || skim_word_any(src, len, next, "export\0class\0"))) {
@@ -401,7 +381,7 @@ bool skim_syntax_item_needs_statement_semicolon(
 ) {
   if (item->kind != SKIM_AST_ITEM_TEXT) return false;
   if (item_ends_in_line_comment(src, item->start, item->end)) return false;
-  if (out_ends_in_line_comment(out)) return false;
+  if (item_ends_in_line_comment(out->data, 0, out->len)) return false;
   char prev = skim_prev_non_ws(out->data, out->len);
   if (prev == '\0' || prev == ';' || prev == '{') return false;
   size_t i = skim_skip_ws_comments(src, len, item->content_start);

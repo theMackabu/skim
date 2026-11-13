@@ -183,8 +183,7 @@ size_t skim_skip_statement_like(const char *src, size_t len, size_t i) {
       continue;
     }
     if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
-      while (i < len && src[i] != '\n')
-        i++;
+      i = skim_skip_line_comment(src, len, i);
       return i;
     }
     if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {

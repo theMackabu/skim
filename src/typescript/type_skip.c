@@ -21,8 +21,7 @@ static size_t skip_type_tail_impl(const char *src, size_t len, size_t i, bool st
     if (i + 1 < len && c == '/' && src[i + 1] == '/') {
       if (paren == 0 && bracket == 0 && brace == 0 && angle == 0) break;
       i += 2;
-      while (i < len && src[i] != '\n')
-        i++;
+      i = skim_skip_line_comment(src, len, i);
       continue;
     }
     if (i + 1 < len && c == '/' && src[i + 1] == '*') {
@@ -205,7 +204,7 @@ size_t skim_ts_find_interface_body_or_semicolon(const char *src, size_t len, siz
   return i;
 }
 
-size_t skim_ts_skip_angle_type_list(const char *src, size_t len, size_t i) {
+size_t skim_ts_skip_angle_type_list(const char *src, size_t len, size_t i, bool strict) {
   int depth = 0;
   int paren = 0, bracket = 0, brace = 0;
   while (i < len) {
@@ -217,7 +216,7 @@ size_t skim_ts_skip_angle_type_list(const char *src, size_t len, size_t i) {
       i = skim_skip_string_raw(src, len, i);
       continue;
     }
-    if (depth > 0 && paren == 0 && bracket == 0 && brace == 0 && src[i] == ';') return len + 1;
+    if (strict && depth > 0 && paren == 0 && bracket == 0 && brace == 0 && src[i] == ';') return len + 1;
     if (src[i] == '(') paren++;
     else if (src[i] == ')' && paren > 0) paren--;
     else if (src[i] == '[') bracket++;
@@ -236,5 +235,5 @@ size_t skim_ts_skip_angle_type_list(const char *src, size_t len, size_t i) {
     }
     i++;
   }
-  return depth == 0 ? i : len + 1;
+  return !strict || depth == 0 ? i : len + 1;
 }

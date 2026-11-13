@@ -103,12 +103,6 @@ lookup_local_member(const char *name, char **members, enum_value_t *values, size
   return false;
 }
 
-static size_t trim_expr_left(const char *s, size_t i, size_t end) {
-  while (i < end && skim_is_space(s[i]))
-    i++;
-  return i;
-}
-
 static size_t trim_expr_right(const char *s, size_t start, size_t end) {
   while (end > start && skim_is_space(s[end - 1]))
     end--;
@@ -138,25 +132,6 @@ enum_value_t skim_enum_eval_expr(
   enum_value_t *values,
   size_t member_count
 );
-
-static size_t find_top_level_plus(const char *expr, size_t start, size_t end) {
-  int paren = 0, bracket = 0, brace = 0;
-  for (size_t i = start; i < end;) {
-    if (expr[i] == '\'' || expr[i] == '"' || expr[i] == '`') {
-      i = skim_skip_string_raw(expr, end, i);
-      continue;
-    }
-    if (expr[i] == '(') paren++;
-    else if (expr[i] == ')' && paren > 0) paren--;
-    else if (expr[i] == '[') bracket++;
-    else if (expr[i] == ']' && bracket > 0) bracket--;
-    else if (expr[i] == '{') brace++;
-    else if (expr[i] == '}' && brace > 0) brace--;
-    else if (expr[i] == '+' && paren == 0 && bracket == 0 && brace == 0 && i > start) return i;
-    i++;
-  }
-  return end;
-}
 
 static size_t find_top_level_token(const char *expr, size_t start, size_t end, const char *token) {
   size_t token_len = strlen(token);
@@ -254,7 +229,7 @@ enum_value_t skim_enum_eval_expr(
   enum_value_t *values,
   size_t member_count
 ) {
-  start = trim_expr_left(expr, start, end);
+  start = skim_skip_ws(expr, end, start);
   end = trim_expr_right(expr, start, end);
   if (start >= end) return skim_enum_value_unknown();
 
@@ -262,7 +237,7 @@ enum_value_t skim_enum_eval_expr(
     return skim_enum_eval_expr(expr, start + 1, end - 1, enum_name, members, values, member_count);
   }
 
-  size_t plus = find_top_level_plus(expr, start, end);
+  size_t plus = find_top_level_token(expr, start, end, "+");
   if (plus < end) {
     enum_value_t left = skim_enum_eval_expr(expr, start, plus, enum_name, members, values, member_count);
     enum_value_t right = skim_enum_eval_expr(expr, plus + 1, end, enum_name, members, values, member_count);

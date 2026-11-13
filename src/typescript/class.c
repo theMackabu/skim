@@ -3,6 +3,7 @@
 #include "emit.h"
 #include "skip.h"
 #include "str.h"
+#include "type_syntax.h"
 #include "typescript.h"
 
 #include <stdlib.h>
@@ -65,7 +66,7 @@ static void emit_class_header(
       }
     }
     if (i < body_open && src[i] == '<') {
-      i = skim_class_skip_angle_type_list(src, len, i);
+      i = skim_ts_skip_angle_type_list(src, len, i, false);
       continue;
     }
     if (skim_transform_try_at(out, src, len, &i)) continue;
@@ -103,7 +104,7 @@ static size_t find_class_body_open(const char *src, size_t len, size_t i) {
     else if (c == '[') bracket++;
     else if (c == ']' && bracket > 0) bracket--;
     else if (c == '<') {
-      i = skim_class_skip_angle_type_list(src, len, i);
+      i = skim_ts_skip_angle_type_list(src, len, i, false);
       continue;
     } else if (c == '{' && paren == 0 && bracket == 0) return i;
     i++;
@@ -227,8 +228,7 @@ static size_t find_after_top_level_super(const char *src, size_t len, size_t sta
     }
     if (i + 1 < len && src[i] == '/' && src[i + 1] == '/') {
       i += 2;
-      while (i < end && src[i] != '\n')
-        i++;
+      i = skim_skip_line_comment(src, end, i);
       continue;
     }
     if (i + 1 < len && src[i] == '/' && src[i + 1] == '*') {

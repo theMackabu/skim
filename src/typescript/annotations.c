@@ -53,7 +53,7 @@ static bool type_alias_at(const char *src, size_t len, size_t i) {
   if (name_start == name_end) return false;
   if (skim_range_has_newline(src, i + 4, name_start)) return false;
   j = skim_skip_ws(src, len, j);
-  if (j < len && src[j] == '<') j = skim_ts_skip_angle_type_list(src, len, j);
+  if (j < len && src[j] == '<') j = skim_ts_skip_angle_type_list(src, len, j, true);
   j = skim_skip_ws(src, len, j);
   return j < len && src[j] == '=';
 }
@@ -70,7 +70,7 @@ static bool angle_is_probably_type_list(const char *src, size_t len, size_t i, s
   if (i + 1 < len && src[i + 1] == '=') return false;
   size_t first = skim_skip_ws(src, len, i + 1);
   if (first >= len) return false;
-  size_t end = skim_ts_skip_angle_type_list(src, len, i);
+  size_t end = skim_ts_skip_angle_type_list(src, len, i, true);
   if (end > len || end == i) return false;
   int paren = 0, bracket = 0, brace = 0, angle = 0;
   for (size_t p = i + 1; p + 1 < end; p++) {
@@ -114,7 +114,7 @@ static bool angle_is_probably_type_assertion(const char *src, size_t len, size_t
     !skim_word_before(src, i, "yield")
   )
     return false;
-  size_t end = skim_ts_skip_angle_type_list(src, len, i);
+  size_t end = skim_ts_skip_angle_type_list(src, len, i, true);
   if (end >= len || end == i) return false;
   size_t j = skim_skip_ws(src, len, end);
   if (j >= len) return false;

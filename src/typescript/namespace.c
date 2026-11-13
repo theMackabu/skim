@@ -260,6 +260,15 @@ static bool transform_export_const(skim_str_t *out, const char *ns, const char *
   return true;
 }
 
+static void emit_namespace_alias(skim_str_t *out, const char *ns, const char *name, size_t name_len) {
+  skim_str_puts(out, ns);
+  skim_str_putc(out, '.');
+  skim_str_putn(out, name, name_len);
+  skim_str_puts(out, " = ");
+  skim_str_putn(out, name, name_len);
+  skim_str_puts(out, ";\n");
+}
+
 static bool transform_export_import_equals(skim_str_t *out, const char *ns, const char *src, size_t len, size_t *io) {
   size_t i = *io;
   if (!skim_word_at(src, len, i, "export")) return false;
@@ -283,26 +292,13 @@ static bool transform_export_import_equals(skim_str_t *out, const char *ns, cons
   skim_str_puts(out, " = ");
   skim_str_putn(out, src + rhs, rhs_end - rhs);
   skim_str_puts(out, ";\n");
-  skim_str_puts(out, ns);
-  skim_str_putc(out, '.');
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, " = ");
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, ";\n");
+  emit_namespace_alias(out, ns, src + name_start, name_end - name_start);
   *io = end;
   return true;
 }
 
-static bool prior_namespace_decl(const char *src, size_t pos, const char *name) {
-  return skim_decl_seen_before(src, name, pos, SKIM_DECL_NAMESPACE);
-}
-
-static bool prior_enum_decl(const char *src, size_t pos, const char *name) {
-  return skim_decl_seen_before(src, name, pos, SKIM_DECL_ENUM);
-}
-
-static bool prior_value_decl(const char *src, size_t pos, const char *name) {
-  return skim_decl_seen_before(src, name, pos, SKIM_DECL_VALUE);
+static bool namespace_name_declared_before(const char *src, size_t len, size_t pos, const char *name) {
+  return skim_decl_seen_before(src, name, pos, SKIM_DECL_VALUE) || skim_ts_local_value_decl_before(src, len, pos, name);
 }
 
 static size_t namespace_end_after_body(const char *src, size_t len, size_t body_end) {
@@ -404,12 +400,7 @@ static bool transform_export_function(skim_str_t *out, const char *ns, const cha
   if (is_async) skim_str_puts(out, "async ");
   skim_transform_range(src, len, fn, body_close, out);
   skim_str_puts(out, "\n");
-  skim_str_puts(out, ns);
-  skim_str_putc(out, '.');
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, " = ");
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, ";\n");
+  emit_namespace_alias(out, ns, src + name_start, name_end - name_start);
   *io = body_close;
   return true;
 }
@@ -435,12 +426,7 @@ static bool transform_export_class(skim_str_t *out, const char *ns, const char *
 
   skim_transform_range(src, len, cls, body_close, out);
   skim_str_puts(out, "\n");
-  skim_str_puts(out, ns);
-  skim_str_putc(out, '.');
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, " = ");
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, ";\n");
+  emit_namespace_alias(out, ns, src + name_start, name_end - name_start);
   *io = body_close;
   return true;
 }
@@ -464,12 +450,7 @@ static bool transform_export_enum(skim_str_t *out, const char *ns, const char *s
   }
   skim_str_putn(out, tmp.data, tmp.len);
   free(tmp.data);
-  skim_str_puts(out, ns);
-  skim_str_putc(out, '.');
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, " = ");
-  skim_str_putn(out, src + name_start, name_end - name_start);
-  skim_str_puts(out, ";\n");
+  emit_namespace_alias(out, ns, src + name_start, name_end - name_start);
   *io = enum_io;
   return true;
 }
@@ -491,12 +472,7 @@ static bool transform_export_namespace(skim_str_t *out, const char *ns, const ch
     namespace_chain_t chain = namespace_chain_parse(src, len, name, body_open);
     if (namespace_chain_has_body(&chain, src, len)) {
       size_t body_end = namespace_chain_lower(out, &chain, src, len, false);
-      skim_str_puts(out, ns);
-      skim_str_putc(out, '.');
-      skim_str_puts(out, name);
-      skim_str_puts(out, " = ");
-      skim_str_puts(out, name);
-      skim_str_puts(out, ";\n");
+      emit_namespace_alias(out, ns, name, strlen(name));
       *io = namespace_end_after_body(src, len, body_end);
       namespace_chain_free(&chain);
       free(name);
@@ -647,8 +623,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
   if (!has_body && !has_ambient_decl) {
     if (
       is_export && future_runtime_namespace_decl(src, len, body_end + 1, name) &&
-      !prior_namespace_decl(src, *io, name) && !prior_enum_decl(src, *io, name) && !prior_value_decl(src, *io, name) &&
-      !skim_ts_local_value_decl_before(src, len, *io, name)
+      !namespace_name_declared_before(src, len, *io, name)
     ) {
       skim_str_puts(out, "export let ");
       skim_str_puts(out, name);
@@ -660,10 +635,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
     return true;
   }
 
-  if (
-    !prior_namespace_decl(src, *io, name) && !prior_enum_decl(src, *io, name) && !prior_value_decl(src, *io, name) &&
-    !skim_ts_local_value_decl_before(src, len, *io, name)
-  ) {
+  if (!namespace_name_declared_before(src, len, *io, name)) {
     if (is_export) skim_str_puts(out, "export ");
     skim_str_puts(out, "let ");
     skim_str_puts(out, name);
