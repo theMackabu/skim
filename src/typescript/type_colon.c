@@ -37,7 +37,7 @@ bool skim_colon_looks_like_case_label(const char *src, size_t colon) {
   while (k > 0 && src[k - 1] != '\n' && src[k - 1] != '\r' && src[k - 1] != ';')
     k--;
   size_t line = skim_skip_ws(src, colon, k);
-  if (!skim_word_at(src, colon, line, "case") && !skim_word_at(src, colon, line, "default")) return false;
+  if (!skim_word_any(src, colon, line, "case\0default\0")) return false;
   int paren = 0, bracket = 0, brace = 0;
   for (size_t p = line; p < colon; p++) {
     char c = src[p];
@@ -77,12 +77,8 @@ static bool colon_looks_like_statement_label(const char *src, size_t len, size_t
   if (before_line > 0 && (src[before_line - 1] == '(' || src[before_line - 1] == ',')) return false;
   size_t next = skim_skip_ws(src, len, i + 1);
   if (
-    next >= len || src[next] == '{' || skim_word_at(src, len, next, "while") || skim_word_at(src, len, next, "for") ||
-    skim_word_at(src, len, next, "if") || skim_word_at(src, len, next, "switch") ||
-    skim_word_at(src, len, next, "do") || skim_word_at(src, len, next, "try") || skim_word_at(src, len, next, "var") ||
-    skim_word_at(src, len, next, "let") || skim_word_at(src, len, next, "const") ||
-    skim_word_at(src, len, next, "typeof") || skim_word_at(src, len, next, "break") ||
-    skim_word_at(src, len, next, "continue")
+    next >= len || src[next] == '{' ||
+    skim_word_any(src, len, next, "while\0for\0if\0switch\0do\0try\0var\0let\0const\0typeof\0break\0continue\0")
   )
     return true;
   if (next < len && skim_is_id_start(src[next])) {
@@ -112,12 +108,7 @@ static bool colon_looks_like_statement_label(const char *src, size_t len, size_t
       break;
     }
   }
-  if (
-    skim_word_at(src, len, next, "while") || skim_word_at(src, len, next, "for") ||
-    skim_word_at(src, len, next, "if") || skim_word_at(src, len, next, "switch") ||
-    skim_word_at(src, len, next, "do") || skim_word_at(src, len, next, "try")
-  )
-    return true;
+  if (skim_word_any(src, len, next, "while\0for\0if\0switch\0do\0try\0")) return true;
   if (next < len && skim_is_id_start(src[next])) {
     size_t name_start = next++;
     while (next < len && skim_is_id_part(src[next]))
@@ -125,13 +116,8 @@ static bool colon_looks_like_statement_label(const char *src, size_t len, size_t
     next = skim_skip_ws(src, len, next);
     if (next < len && src[next] == ':' && next > name_start) return true;
   }
-  return next >= len || src[next] == '{' || skim_word_at(src, len, next, "while") ||
-         skim_word_at(src, len, next, "for") || skim_word_at(src, len, next, "if") ||
-         skim_word_at(src, len, next, "switch") || skim_word_at(src, len, next, "do") ||
-         skim_word_at(src, len, next, "try") || skim_word_at(src, len, next, "var") ||
-         skim_word_at(src, len, next, "let") || skim_word_at(src, len, next, "const") ||
-         skim_word_at(src, len, next, "typeof") || skim_word_at(src, len, next, "break") ||
-         skim_word_at(src, len, next, "continue");
+  return next >= len || src[next] == '{' ||
+         skim_word_any(src, len, next, "while\0for\0if\0switch\0do\0try\0var\0let\0const\0typeof\0break\0continue\0");
 }
 
 void skim_ts_annotations_memo_invalidate(void) {
@@ -214,11 +200,7 @@ bool skim_ts_colon_is_in_var_decl(const char *src, size_t colon) {
   while (line > 0 && src[line - 1] != '\n' && src[line - 1] != '\r' && src[line - 1] != ';')
     line--;
   for (size_t p = line; p < colon; p++) {
-    if (
-      skim_word_at(src, colon, p, "var") || skim_word_at(src, colon, p, "let") || skim_word_at(src, colon, p, "const")
-    ) {
-      return true;
-    }
+    if (skim_word_any(src, colon, p, "var\0let\0const\0")) { return true; }
   }
   for (size_t k = colon; k > 0;) {
     char c = src[--k];

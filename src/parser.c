@@ -121,9 +121,7 @@ static bool item_has_own_braced_body(const char *src, size_t len, size_t i) {
     (!declaration_name_on_same_line(src, len, i + 6) || module_name_is_in_operator(src, len, i + 6))
   )
     return false;
-  return skim_word_at(src, len, i, "enum") || skim_word_at(src, len, i, "namespace") ||
-         skim_word_at(src, len, i, "module") || skim_word_at(src, len, i, "class") ||
-         skim_word_at(src, len, i, "interface");
+  return skim_word_any(src, len, i, "enum\0namespace\0module\0class\0interface\0");
 }
 
 static size_t braced_item_end(const char *src, size_t len, size_t i) {
@@ -303,15 +301,9 @@ static size_t variable_item_end(const char *src, size_t len, size_t i) {
       return i + 1;
     } else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && prev_allows_asi_item(src, i)) {
       size_t next = skim_skip_ws_comments(src, len, i + 1);
-      if (
-        next >= len || skim_word_at(src, len, next, "var") || skim_word_at(src, len, next, "let") ||
-        skim_word_at(src, len, next, "const") || skim_word_at(src, len, next, "function") ||
-        skim_word_at(src, len, next, "class") || skim_word_at(src, len, next, "interface") ||
-        skim_word_at(src, len, next, "type") || skim_word_at(src, len, next, "enum") ||
-        skim_word_at(src, len, next, "namespace") || skim_word_at(src, len, next, "module") ||
-        skim_word_at(src, len, next, "export") || skim_word_at(src, len, next, "import") ||
-        next_starts_asi_item(src, len, next)
-      ) {
+      static const char item_words[] =
+        "var\0let\0const\0function\0class\0interface\0type\0enum\0namespace\0module\0export\0import\0";
+      if (next >= len || skim_word_any(src, len, next, item_words) || next_starts_asi_item(src, len, next)) {
         return i;
       }
     }
@@ -323,7 +315,7 @@ static size_t variable_item_end(const char *src, size_t len, size_t i) {
 static bool item_is_variable_decl(const char *src, size_t len, size_t i) {
   if (skim_word_at(src, len, i, "export")) i = skim_skip_ws_comments(src, len, i + 6);
   if (skim_word_at(src, len, i, "declare")) i = skim_skip_ws_comments(src, len, i + 7);
-  return skim_word_at(src, len, i, "var") || skim_word_at(src, len, i, "let") || skim_word_at(src, len, i, "const");
+  return skim_word_any(src, len, i, "var\0let\0const\0");
 }
 
 static size_t text_item_end(const char *src, size_t len, size_t i) {
@@ -346,12 +338,7 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
         i++;
       if (starts_decorator || starts_export) {
         size_t next = skim_skip_ws_comments(src, len, i + 1);
-        if (
-          next < len &&
-          (src[next] == '@' || skim_word_at(src, len, next, "export") || skim_word_at(src, len, next, "class"))
-        ) {
-          continue;
-        }
+        if (next < len && (src[next] == '@' || skim_word_any(src, len, next, "export\0class\0"))) { continue; }
       }
       if (
         paren == 0 && bracket == 0 && brace == 0 && prev_allows_asi_item(src, comment) &&
@@ -376,10 +363,7 @@ static size_t text_item_end(const char *src, size_t len, size_t i) {
     } else if ((c == '\n' || c == '\r') && paren == 0 && bracket == 0 && brace == 0 && prev_allows_asi_item(src, i)) {
       if (starts_decorator || starts_export) {
         size_t next = skim_skip_ws_comments(src, len, i + 1);
-        if (
-          next < len &&
-          (src[next] == '@' || skim_word_at(src, len, next, "export") || skim_word_at(src, len, next, "class"))
-        ) {
+        if (next < len && (src[next] == '@' || skim_word_any(src, len, next, "export\0class\0"))) {
           i++;
           continue;
         }
@@ -406,11 +390,7 @@ static bool item_starts_statement_expression(const char *src, size_t len, size_t
     src[i] == '-' || src[i] == '!' || src[i] == '~'
   )
     return true;
-  if (
-    skim_word_at(src, len, i, "new") || skim_word_at(src, len, i, "this") || skim_word_at(src, len, i, "super") ||
-    skim_word_at(src, len, i, "await") || skim_word_at(src, len, i, "yield")
-  )
-    return true;
+  if (skim_word_any(src, len, i, "new\0this\0super\0await\0yield\0")) return true;
   if (!skim_is_id_start(src[i])) return false;
   size_t start = 0, end = 0;
   size_t after = skim_parse_identifier(src, len, i, &start, &end);
@@ -433,12 +413,7 @@ bool skim_syntax_item_needs_statement_semicolon(
   if (prev == '\0' || prev == ';' || prev == '{') return false;
   size_t i = skim_skip_ws_comments(src, len, item->content_start);
   if (i >= len) return false;
-  if (
-    skim_word_at(src, len, i, "function") || skim_word_at(src, len, i, "class") || skim_word_at(src, len, i, "if") ||
-    skim_word_at(src, len, i, "for") || skim_word_at(src, len, i, "while") || skim_word_at(src, len, i, "switch") ||
-    skim_word_at(src, len, i, "try") || skim_word_at(src, len, i, "do")
-  )
-    return false;
+  if (skim_word_any(src, len, i, "function\0class\0if\0for\0while\0switch\0try\0do\0")) return false;
   return item_is_variable_decl(src, len, i) || item_starts_statement_expression(src, len, i);
 }
 

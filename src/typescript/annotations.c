@@ -345,14 +345,10 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
   bool is_declare_keyword = false;
   if (skim_word_at(src, len, i, "declare") && !skim_word_before(src, i, "function")) {
     size_t after_declare = skim_skip_ws_comments(src, len, i + 7);
+    static const char declare_words[] =
+      "class\0enum\0namespace\0module\0interface\0global\0function\0async\0var\0let\0const\0type\0";
     is_declare_keyword =
-      !skim_range_has_newline(src, i + 7, after_declare) &&
-      (skim_word_at(src, len, after_declare, "class") || skim_word_at(src, len, after_declare, "enum") ||
-       skim_word_at(src, len, after_declare, "namespace") || skim_word_at(src, len, after_declare, "module") ||
-       skim_word_at(src, len, after_declare, "interface") || skim_word_at(src, len, after_declare, "global") ||
-       skim_word_at(src, len, after_declare, "function") || skim_word_at(src, len, after_declare, "async") ||
-       skim_word_at(src, len, after_declare, "var") || skim_word_at(src, len, after_declare, "let") ||
-       skim_word_at(src, len, after_declare, "const") || skim_word_at(src, len, after_declare, "type"));
+      !skim_range_has_newline(src, i + 7, after_declare) && skim_word_any(src, len, after_declare, declare_words);
   }
   bool is_type_alias = type_alias_at(src, len, i);
   if (export_declare || is_type_alias || is_declare_keyword) {
@@ -361,15 +357,9 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
       size_t after_declare = skim_skip_ws_comments(src, len, i + 7);
       if (skim_word_at(src, len, after_declare, "type")) end = skim_skip_type_alias(src, len, after_declare);
       else if (skim_word_at(src, len, after_declare, "function")) end = skim_ts_skip_declare_function_statement(src, len, i);
-      else if (
-        skim_word_at(src, len, after_declare, "var") || skim_word_at(src, len, after_declare, "let") ||
-        skim_word_at(src, len, after_declare, "const")
-      )
+      else if (skim_word_any(src, len, after_declare, "var\0let\0const\0"))
         end = skim_ts_skip_type_declaration_statement(src, len, i);
-      bool body_decl =
-        skim_word_at(src, len, after_declare, "class") || skim_word_at(src, len, after_declare, "enum") ||
-        skim_word_at(src, len, after_declare, "namespace") || skim_word_at(src, len, after_declare, "module") ||
-        skim_word_at(src, len, after_declare, "global") || skim_word_at(src, len, after_declare, "interface");
+      bool body_decl = skim_word_any(src, len, after_declare, "class\0enum\0namespace\0module\0global\0interface\0");
       size_t body = after_declare;
       while (body < len && src[body] != '{' && src[body] != ';') {
         if (src[body] == '\'' || src[body] == '"' || src[body] == '`') body = skim_skip_string_raw(src, len, body);
@@ -423,7 +413,7 @@ bool skim_ts_annotations_try(skim_str_t *out, const char *src, size_t len, size_
       size_t after_full = skim_skip_ws(src, len, full);
       if (after_full < len && src[after_full] == '{' && skim_ts_colon_after_function_like_params(src, i)) end = full;
     }
-    if (skim_word_at(src, len, end, "of") || skim_word_at(src, len, end, "in")) skim_str_putc(out, ' ');
+    if (skim_word_any(src, len, end, "of\0in\0")) skim_str_putc(out, ' ');
     *io = end;
     return true;
   }

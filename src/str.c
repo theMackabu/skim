@@ -21,6 +21,23 @@ void skim_str_grow(skim_str_t *s, size_t extra) {
   s->data[s->len] = '\0';
 }
 
+void skim_str_putc(skim_str_t *s, char c) {
+  skim_str_reserve(s, 1);
+  s->data[s->len++] = c;
+  s->data[s->len] = '\0';
+}
+
+void skim_str_putn(skim_str_t *s, const char *p, size_t n) {
+  skim_str_reserve(s, n);
+  memcpy(s->data + s->len, p, n);
+  s->len += n;
+  s->data[s->len] = '\0';
+}
+
+void skim_str_puts(skim_str_t *s, const char *p) {
+  skim_str_putn(s, p, strlen(p));
+}
+
 char *skim_slice_dup(const char *src, size_t start, size_t end) {
   char *s = malloc(end - start + 1);
   if (!s) skim_die("out of memory");

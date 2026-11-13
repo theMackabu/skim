@@ -92,18 +92,13 @@ static void terminate_namespace_body(skim_str_t *body) {
 
 static bool namespace_body_has_ambient_decl(const char *src, size_t len, size_t start, size_t end) {
   for (size_t i = start; i < end;) {
-    i = skim_skip_ws_comments(src, len, i);
+    i = skim_skip_ws_comments_fast(src, len, i);
     if (i >= end) break;
     if (skim_word_at(src, len, i, "export")) i = skim_skip_ws_comments(src, len, i + 6);
     if (i >= end) break;
     if (skim_word_at(src, len, i, "declare")) {
       size_t after_declare = skim_skip_ws_comments(src, len, i + 7);
-      if (
-        !skim_word_at(src, len, after_declare, "namespace") && !skim_word_at(src, len, after_declare, "module") &&
-        !skim_word_at(src, len, after_declare, "global") && !skim_word_at(src, len, after_declare, "interface")
-      ) {
-        return true;
-      }
+      if (!skim_word_any(src, len, after_declare, "namespace\0module\0global\0interface\0")) { return true; }
       size_t body = after_declare;
       while (body < end && src[body] != '{' && src[body] != ';') {
         if (src[body] == '\'' || src[body] == '"' || src[body] == '`') body = skim_skip_string_raw(src, len, body);
@@ -152,7 +147,7 @@ static size_t skip_type_like_decl(const char *src, size_t len, size_t i) {
 
 static bool namespace_source_has_runtime_code(const char *src, size_t len, size_t start, size_t end) {
   for (size_t i = start; i < end;) {
-    i = skim_skip_ws_comments(src, len, i);
+    i = skim_skip_ws_comments_fast(src, len, i);
     if (i >= end) break;
     if (src[i] == ';') {
       i++;
@@ -165,14 +160,14 @@ static bool namespace_source_has_runtime_code(const char *src, size_t len, size_
       i = skim_skip_statement_like(src, len, i);
       continue;
     }
-    if (skim_word_at(src, len, i, "type") || skim_word_at(src, len, i, "interface")) {
+    if (skim_word_any(src, len, i, "type\0interface\0")) {
       size_t kw_len = skim_word_at(src, len, i, "type") ? 4 : 9;
       size_t name_start = skim_skip_ws_comments(src, len, i + kw_len);
       if (skim_range_has_newline(src, i + kw_len, name_start)) return true;
       i = skip_type_like_decl(src, len, i);
       continue;
     }
-    if (skim_word_at(src, len, i, "namespace") || skim_word_at(src, len, i, "module")) {
+    if (skim_word_any(src, len, i, "namespace\0module\0")) {
       size_t kw_len = skim_word_at(src, len, i, "namespace") ? 9 : 6;
       size_t j = skim_skip_ws_comments(src, len, i + kw_len);
       if (skim_range_has_newline(src, i + kw_len, j)) return true;
@@ -212,7 +207,7 @@ static bool future_runtime_namespace_decl(const char *src, size_t len, size_t st
     if (skim_skip_comment(src, len, &i)) continue;
     size_t item = i;
     if (skim_word_at(src, len, item, "export")) item = skim_skip_ws_comments(src, len, item + 6);
-    if (skim_word_at(src, len, item, "namespace") || skim_word_at(src, len, item, "module")) {
+    if (skim_word_any(src, len, item, "namespace\0module\0")) {
       size_t kw_len = skim_word_at(src, len, item, "namespace") ? 9 : 6;
       size_t name_start = 0, name_end = 0;
       size_t after_name = skim_parse_identifier(src, len, item + kw_len, &name_start, &name_end);
@@ -605,10 +600,10 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
   bool is_export = false;
   if (skim_word_at(src, len, i, "export")) {
     size_t j = skim_skip_ws_comments(src, len, i + 6);
-    if (!skim_word_at(src, len, j, "namespace") && !skim_word_at(src, len, j, "module")) return false;
+    if (!skim_word_any(src, len, j, "namespace\0module\0")) return false;
     is_export = true;
     i = j;
-  } else if (!skim_word_at(src, len, i, "namespace") && !skim_word_at(src, len, i, "module")) {
+  } else if (!skim_word_any(src, len, i, "namespace\0module\0")) {
     return false;
   }
 
@@ -620,7 +615,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
   if (skim_word_at(src, len, *io, "module") && name_end - name_start == 2 && memcmp(src + name_start, "in", 2) == 0)
     return false;
   char *name = skim_slice_dup(src, name_start, name_end);
-  i = skim_skip_ws_comments(src, len, i);
+  i = skim_skip_ws_comments_fast(src, len, i);
   if (i < len && src[i] == '.') {
     namespace_chain_t chain = namespace_chain_parse(src, len, name, i);
     if (namespace_chain_has_body(&chain, src, len)) {
@@ -638,7 +633,7 @@ bool skim_ts_namespace_try(skim_str_t *out, const char *src, size_t len, size_t 
       return false;
     }
     char *inner = skim_slice_dup(src, inner_start, inner_end);
-    i = skim_skip_ws_comments(src, len, i);
+    i = skim_skip_ws_comments_fast(src, len, i);
     if (i >= len || src[i] != '{') {
       free(inner);
       free(name);

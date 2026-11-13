@@ -1,8 +1,9 @@
 project('skim', 'c',
-  version: '0.1.1',
+  version: '0.1.2',
   license: 'MIT',
   default_options: [
     'buildtype=release',
+    'optimization=2',
     'c_std=c23',
     'default_library=both',
     'warning_level=2',
@@ -70,7 +71,6 @@ libskim_static = static_library('skim_static',
   include_directories: [public_inc, private_inc],
   dependencies: math_dep,
   c_args: ['-fvisibility=hidden'] + static_api_args,
-  override_options: ['optimization=3'],
 )
 
 skim_cli_dep = declare_dependency(
@@ -80,19 +80,26 @@ skim_cli_dep = declare_dependency(
   compile_args: static_api_args,
 )
 
+skim_cli_link_args = cc.get_supported_link_arguments(
+  '-Wl,-dead_strip',
+  '-Wl,-no_data_const',
+  '-Wl,-x',
+  '-Wl,--gc-sections',
+  '-Wl,--strip-all',
+)
+
 skim_cli = executable('skim',
   files('tools/skim.c'),
   dependencies: skim_cli_dep,
   include_directories: private_inc,
   c_args: ['-DSKIM_VERSION="' + meson.project_version() + '"'],
-  override_options: ['optimization=3'],
+  link_args: skim_cli_link_args,
   install: true,
 )
 
 skim_bench = executable('skim_bench',
   files('tests/bench.c'),
   dependencies: skim_cli_dep,
-  override_options: ['optimization=3'],
   build_by_default: false,
 )
 

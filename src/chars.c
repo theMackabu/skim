@@ -1,55 +1,39 @@
 #include "chars.h"
 
-#define CC_WORD (SKIM_CC_ID_START | SKIM_CC_ID_PART | SKIM_CC_EMIT_DISPATCH)
-#define CC_NUM (SKIM_CC_ID_PART | SKIM_CC_DIGIT | SKIM_CC_EMIT_DISPATCH)
-#define CC_D SKIM_CC_EMIT_DISPATCH
-#define CC_C SKIM_CC_CLEANUP_SPECIAL
-#define CC_WS (SKIM_CC_SPACE | SKIM_CC_CLEANUP_SPECIAL)
-#define CC_QUOTE                                                                                                       \
-  (SKIM_CC_EMIT_DISPATCH | SKIM_CC_CLEANUP_SPECIAL | SKIM_CC_MARKER | SKIM_CC_BALANCED | SKIM_CC_ITEM_END |            \
-   SKIM_CC_ANGLE)
-#define CC_OPEN_CLOSE (SKIM_CC_BRACKET | SKIM_CC_BACK_STOP | SKIM_CC_BALANCED | SKIM_CC_ITEM_END | SKIM_CC_ANGLE)
-#define CC_DECL (CC_WORD | SKIM_CC_DECL_START)
-#define CC_MARK_DECL (CC_DECL | SKIM_CC_MARKER)
+enum {
+#define SKIM_CHAR_GROUP(name, flags) CC_##name = flags,
+#include "char_group_list.h"
+};
 
 const unsigned short skim_char_class[256] = {
-  ['a'] = CC_WORD,  ['b'] = CC_WORD,  ['c'] = CC_DECL,  ['d'] = CC_WORD,
-  ['e'] = CC_MARK_DECL,               ['f'] = CC_DECL,  ['g'] = CC_WORD,  ['h'] = CC_WORD,
-  ['i'] = CC_MARK_DECL,               ['j'] = CC_WORD,  ['k'] = CC_WORD,  ['l'] = CC_DECL,
-  ['m'] = CC_WORD,  ['n'] = CC_DECL,  ['o'] = CC_WORD,  ['p'] = CC_WORD,  ['q'] = CC_WORD,
-  ['r'] = CC_WORD,  ['s'] = CC_WORD,  ['t'] = CC_DECL,  ['u'] = CC_WORD,  ['v'] = CC_DECL,
-  ['w'] = CC_WORD,  ['x'] = CC_WORD,  ['y'] = CC_WORD,  ['z'] = CC_WORD,
-  ['A'] = CC_WORD,  ['B'] = CC_WORD,  ['C'] = CC_WORD,  ['D'] = CC_WORD,  ['E'] = CC_WORD,
-  ['F'] = CC_WORD,  ['G'] = CC_WORD,  ['H'] = CC_WORD,  ['I'] = CC_WORD,  ['J'] = CC_WORD,
-  ['K'] = CC_WORD,  ['L'] = CC_WORD,  ['M'] = CC_WORD,  ['N'] = CC_WORD,  ['O'] = CC_WORD,
-  ['P'] = CC_WORD,  ['Q'] = CC_WORD,  ['R'] = CC_WORD,  ['S'] = CC_WORD,  ['T'] = CC_WORD,
-  ['U'] = CC_WORD,  ['V'] = CC_WORD,  ['W'] = CC_WORD,  ['X'] = CC_WORD,  ['Y'] = CC_WORD,
-  ['Z'] = CC_WORD,  ['_'] = CC_WORD,  ['$'] = CC_WORD,
-  ['0'] = CC_NUM,   ['1'] = CC_NUM,   ['2'] = CC_NUM,   ['3'] = CC_NUM,   ['4'] = CC_NUM,
-  ['5'] = CC_NUM,   ['6'] = CC_NUM,   ['7'] = CC_NUM,   ['8'] = CC_NUM,   ['9'] = CC_NUM,
-  [' '] = CC_WS,
-  ['\t'] = CC_WS,
-  ['\n'] = CC_WS | SKIM_CC_ITEM_END,
-  ['\v'] = CC_WS,
-  ['\f'] = CC_WS,
-  ['\r'] = CC_WS | SKIM_CC_ITEM_END,
-  ['\''] = CC_QUOTE,
-  ['"'] = CC_QUOTE,
-  ['`'] = CC_QUOTE,
-  ['/'] = CC_QUOTE & ~SKIM_CC_ANGLE,
-  ['('] = CC_D | CC_C | CC_OPEN_CLOSE,
-  [')'] = CC_C | CC_OPEN_CLOSE,
-  ['{'] = CC_D | CC_C | CC_OPEN_CLOSE,
-  ['}'] = CC_D | CC_OPEN_CLOSE,
-  ['['] = CC_OPEN_CLOSE,
-  [']'] = CC_OPEN_CLOSE,
-  ['<'] = CC_D | SKIM_CC_ANGLE,
-  ['>'] = SKIM_CC_ANGLE,
-  [';'] = CC_C | SKIM_CC_BACK_STOP | SKIM_CC_ITEM_END | SKIM_CC_ANGLE,
-  [':'] = CC_D | SKIM_CC_BACK_STOP | SKIM_CC_ITEM_END,
-  ['?'] = CC_D | SKIM_CC_BACK_STOP,
-  [','] = CC_D,
-  ['@'] = CC_D,
-  ['!'] = CC_D,
-  ['='] = CC_C | SKIM_CC_ANGLE,
+#define SKIM_CHAR_CLASS(lo, hi, cls) [lo ... hi] = cls,
+#include "char_class_list.h"
 };
+
+bool skim_word_at_slow(const char *src, size_t len, size_t i, const char *word, size_t n) {
+  if (i + n > len || memcmp(src + i, word, n) != 0) return false;
+  if (i > 0 && skim_is_id_part(src[i - 1])) return false;
+  return i + n == len || !skim_is_id_part(src[i + n]);
+}
+
+bool skim_word_any(const char *src, size_t len, size_t i, const char *words) {
+  if (i >= len || !skim_is_id_start(src[i])) return false;
+  if (i > 0 && skim_is_id_part(src[i - 1])) return false;
+  size_t n = 1;
+  while (i + n < len && skim_is_id_part(src[i + n]))
+    n++;
+  for (; *words; words += strlen(words) + 1) {
+    if (*words == src[i] && strlen(words) == n && memcmp(src + i, words, n) == 0) return true;
+  }
+  return false;
+}
+
+bool skim_word_before(const char *src, size_t pos, const char *word) {
+  while (pos > 0 && skim_is_space(src[pos - 1]))
+    pos--;
+  size_t end = pos;
+  while (pos > 0 && skim_is_id_part(src[pos - 1]))
+    pos--;
+  size_t n = strlen(word);
+  return end - pos == n && memcmp(src + pos, word, n) == 0;
+}

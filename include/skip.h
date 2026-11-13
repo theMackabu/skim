@@ -3,6 +3,17 @@
 
 #include "chars.h"
 
+bool skim_has_effective_code(const char *src, size_t len);
+bool skim_slash_starts_regex(const char *src, size_t start, size_t i);
+
+size_t skim_skip_ws_comments(const char *src, size_t len, size_t i);
+size_t skim_skip_regex_literal(const char *src, size_t len, size_t i);
+size_t skim_skip_string_raw(const char *src, size_t len, size_t i);
+size_t skim_skip_balanced(const char *src, size_t len, size_t i, char open, char close);
+size_t skim_skip_type_alias(const char *src, size_t len, size_t i);
+size_t skim_skip_statement_like(const char *src, size_t len, size_t i);
+size_t skim_parse_identifier(const char *src, size_t len, size_t i, size_t *start, size_t *end);
+
 static inline size_t skim_skip_line_comment(const char *src, size_t len, size_t i) {
   if (i >= len) return i;
   const char *newline = memchr(src + i, '\n', len - i);
@@ -40,26 +51,14 @@ static inline bool skim_skip_comment(const char *src, size_t len, size_t *io) {
   return false;
 }
 
-size_t skim_skip_ws_comments_slow(const char *src, size_t len, size_t i);
-
 static inline size_t skim_skip_ws(const char *src, size_t len, size_t i) {
-  while (i < len && skim_is_space(src[i]))
-    i++;
+  while (i < len && skim_is_space(src[i])) i++;
   return i;
 }
 
-static inline size_t skim_skip_ws_comments(const char *src, size_t len, size_t i) {
+static inline size_t skim_skip_ws_comments_fast(const char *src, size_t len, size_t i) {
   if (i >= len || (!skim_is_space(src[i]) && src[i] != '/')) return i;
-  return skim_skip_ws_comments_slow(src, len, i);
+  return skim_skip_ws_comments(src, len, i);
 }
-
-bool skim_slash_starts_regex(const char *src, size_t start, size_t i);
-size_t skim_skip_regex_literal(const char *src, size_t len, size_t i);
-size_t skim_skip_string_raw(const char *src, size_t len, size_t i);
-size_t skim_skip_balanced(const char *src, size_t len, size_t i, char open, char close);
-size_t skim_skip_type_alias(const char *src, size_t len, size_t i);
-size_t skim_skip_statement_like(const char *src, size_t len, size_t i);
-size_t skim_parse_identifier(const char *src, size_t len, size_t i, size_t *start, size_t *end);
-bool skim_has_effective_code(const char *src, size_t len);
 
 #endif

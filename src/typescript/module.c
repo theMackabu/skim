@@ -42,7 +42,7 @@ static bool has_type_declaration(const char *src, size_t len, const char *name) 
   size_t n = strlen(name);
   for (size_t i = 0; i + n < len; i++) {
     if (src[i] != 't' && src[i] != 'i') continue;
-    if ((skim_word_at(src, len, i, "type") || skim_word_at(src, len, i, "interface"))) {
+    if (skim_word_any(src, len, i, "type\0interface\0")) {
       size_t j = skim_skip_ws_comments(src, len, i + (src[i] == 't' ? 4 : 9));
       if (j + n <= len && memcmp(src + j, name, n) == 0 && (j + n == len || !skim_is_id_part(src[j + n]))) return true;
     }
@@ -692,7 +692,7 @@ bool skim_ts_module_try(skim_str_t *out, const char *src, size_t len, size_t *io
       *io = default_overload_end;
       return true;
     }
-    if (skim_word_at(src, len, j, "type") || skim_word_at(src, len, j, "interface")) {
+    if (skim_word_any(src, len, j, "type\0interface\0")) {
       size_t end = i;
       if (skim_word_at(src, len, j, "interface")) {
         size_t body = j + 9;

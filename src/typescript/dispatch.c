@@ -27,11 +27,7 @@ bool skim_transform_try_at(skim_str_t *out, const char *src, size_t len, size_t 
   case '<':
     return skim_ts_annotations_try(out, src, len, io);
   case 'a':
-    if (
-      skim_word_at(src, len, i, "as") || skim_word_at(src, len, i, "abstract") || skim_word_at(src, len, i, "accessor")
-    ) {
-      return skim_ts_annotations_try(out, src, len, io);
-    }
+    if (skim_word_any(src, len, i, "as\0abstract\0accessor\0")) { return skim_ts_annotations_try(out, src, len, io); }
     break;
   case 'c':
     if (skim_word_at(src, len, i, "class")) return skim_ts_class_try(out, src, len, io);
@@ -56,9 +52,7 @@ bool skim_transform_try_at(skim_str_t *out, const char *src, size_t len, size_t 
     break;
   case 'i':
     if (skim_word_at(src, len, i, "import")) return skim_ts_module_try(out, src, len, io);
-    if (skim_word_at(src, len, i, "interface") || skim_word_at(src, len, i, "implements")) {
-      return skim_ts_annotations_try(out, src, len, io);
-    }
+    if (skim_word_any(src, len, i, "interface\0implements\0")) { return skim_ts_annotations_try(out, src, len, io); }
     break;
   case 'm':
     if (skim_word_at(src, len, i, "module")) return skim_ts_namespace_try(out, src, len, io);
@@ -67,10 +61,7 @@ bool skim_transform_try_at(skim_str_t *out, const char *src, size_t len, size_t 
     if (skim_word_at(src, len, i, "namespace")) return skim_ts_namespace_try(out, src, len, io);
     break;
   case 'p':
-    if (
-      skim_word_at(src, len, i, "public") || skim_word_at(src, len, i, "private") ||
-      skim_word_at(src, len, i, "protected")
-    ) {
+    if (skim_word_any(src, len, i, "public\0private\0protected\0")) {
       return skim_ts_annotations_try(out, src, len, io);
     }
     break;
@@ -81,8 +72,7 @@ bool skim_transform_try_at(skim_str_t *out, const char *src, size_t len, size_t 
     if (skim_word_at(src, len, i, "satisfies")) return skim_ts_annotations_try(out, src, len, io);
     break;
   case 't':
-    if (skim_word_at(src, len, i, "type") || skim_word_at(src, len, i, "this"))
-      return skim_ts_annotations_try(out, src, len, io);
+    if (skim_word_any(src, len, i, "type\0this\0")) return skim_ts_annotations_try(out, src, len, io);
     break;
   }
 

@@ -56,10 +56,7 @@ static void emit_class_header(
         size_t close = skim_skip_balanced(src, len, expr, '(', ')');
         size_t after = skim_skip_ws_comments(src, len, close);
         size_t inner = skim_skip_ws_comments(src, len, expr + 1);
-        if (
-          close <= body_open && after == body_open && !skim_word_at(src, len, inner, "await") &&
-          !skim_word_at(src, len, inner, "yield")
-        ) {
+        if (close <= body_open && after == body_open && !skim_word_any(src, len, inner, "await\0yield\0")) {
           skim_str_puts(out, "extends ");
           skim_transform_range(src, len, expr + 1, close - 1, out);
           i = close;
@@ -289,7 +286,7 @@ static bool scan_class_decorators(const char *src, size_t len, size_t *io, class
 
 bool skim_ts_class_try(skim_str_t *out, const char *src, size_t len, size_t *io) {
   size_t i = *io;
-  if (!skim_word_at(src, len, i, "class") && !skim_word_at(src, len, i, "export") && src[i] != '@') return false;
+  if (!skim_word_any(src, len, i, "class\0export\0") && src[i] != '@') return false;
 
   size_t class_word = i;
   class_prefix_t prefix = {0};

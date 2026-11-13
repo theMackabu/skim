@@ -15,7 +15,7 @@ bool skim_has_effective_code(const char *src, size_t len) {
   return false;
 }
 
-size_t skim_skip_ws_comments_slow(const char *src, size_t len, size_t i) {
+size_t skim_skip_ws_comments(const char *src, size_t len, size_t i) {
   for (;;) {
     i = skim_skip_ws(src, len, i);
     if (skim_skip_comment(src, len, &i)) continue;
@@ -131,7 +131,10 @@ size_t skim_skip_regex_literal(const char *src, size_t len, size_t i) {
 
 size_t skim_skip_string_raw(const char *src, size_t len, size_t i) {
   char quote = src[i++];
-  while (i < len) {
+  for (;;) {
+    while (i < len && !skim_char_has(src[i], SKIM_CC_STRING_STOP))
+      i++;
+    if (i >= len) break;
     char c = src[i++];
     if (c == '\\' && i < len && quote != '`') {
       i++;

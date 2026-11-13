@@ -865,11 +865,7 @@ static bool class_reserved_word_before_method_call(const char *src, size_t len, 
   size_t next = skim_skip_ws_comments(src, len, after_name);
   if (name_start != i || next >= end || src[next] != '(') return false;
 
-  return skim_word_at(src, len, i, "class") || skim_word_at(src, len, i, "enum") ||
-         skim_word_at(src, len, i, "export") || skim_word_at(src, len, i, "function") ||
-         skim_word_at(src, len, i, "import") || skim_word_at(src, len, i, "interface") ||
-         skim_word_at(src, len, i, "module") || skim_word_at(src, len, i, "namespace") ||
-         skim_word_at(src, len, i, "type");
+  return skim_word_any(src, len, i, "class\0enum\0export\0function\0import\0interface\0module\0namespace\0type\0");
 }
 
 void skim_class_transform_body_range(const char *src, size_t len, size_t start, size_t end, skim_str_t *out) {
