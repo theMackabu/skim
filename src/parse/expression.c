@@ -17,12 +17,12 @@ static bool arrow_follows(const parser_t *p, uint32_t open, uint32_t *arrow) {
   return end > after + 1 && kind_at(p, end) == SKIM_T_ARROW;
 }
 
-static void arrow_body(parser_t *p) {
+static void arrow_body(parser_t *p, bool consequent) {
   if (kind(p) == '{') skim_parse_block(p);
-  else skim_parse_assignment(p, false);
+  else skim_parse_assignment(p, consequent);
 }
 
-static void arrow_function(parser_t *p, uint32_t open, uint32_t arrow) {
+static void arrow_function(parser_t *p, uint32_t open, uint32_t arrow, bool consequent) {
   uint32_t after = after_pair(p, open);
   scope_mark_t scope = skim_scope_push(p, open, true);
   p->i = open;
@@ -32,15 +32,15 @@ static void arrow_function(parser_t *p, uint32_t open, uint32_t arrow) {
     flag(p, arrow, SKIM_TF_JOIN);
   }
   p->i = arrow + 1;
-  arrow_body(p);
+  arrow_body(p, consequent);
   skim_scope_pop(p, scope);
 }
 
-static void simple_arrow_function(parser_t *p, uint32_t param) {
+static void simple_arrow_function(parser_t *p, uint32_t param, bool consequent) {
   scope_mark_t scope = skim_scope_push(p, param, true);
   skim_declare(p, param, SKIM_D_PARAM);
   p->i = param + 2;
-  arrow_body(p);
+  arrow_body(p, consequent);
   skim_scope_pop(p, scope);
 }
 
@@ -48,7 +48,7 @@ static bool arrow_accepted(parser_t *p, uint32_t open, uint32_t arrow, bool cons
   if (!consequent || kind_at(p, after_pair(p, open)) != ':') return true;
   uint32_t saved = p->i;
   p->dry++;
-  arrow_function(p, open, arrow);
+  arrow_function(p, open, arrow, true);
   bool accepted = kind(p) == ':';
   p->dry--;
   p->i = saved;
@@ -100,18 +100,26 @@ static bool member_modifier_applies(const parser_t *p) {
   }
 }
 
-static bool redundant_property_value(const parser_t *p, uint32_t key) {
+static uint32_t redundant_property_value(const parser_t *p, uint32_t key) {
   uint32_t value = p->i + 1;
-  if (key + 1 != p->i || kind_at(p, key) != SKIM_T_WORD || kind_at(p, value) != SKIM_T_WORD) return false;
-  if (kind_at(p, value + 1) != ',' && kind_at(p, value + 1) != '}') return false;
+  if (key + 1 != p->i || kind_at(p, key) != SKIM_T_WORD || kind_at(p, value) != SKIM_T_WORD) return 0;
   uint32_t n = p->t[key].end - p->t[key].start;
-  return n == p->t[value].end - p->t[value].start &&
-         memcmp(p->src + p->t[key].start, p->src + p->t[value].start, n) == 0;
+  if (n != p->t[value].end - p->t[value].start) return 0;
+  if (memcmp(p->src + p->t[key].start, p->src + p->t[value].start, n) != 0) return 0;
+  uint32_t end = value + 1;
+  for (;;) {
+    uint8_t w = word_at(p, end);
+    if (kind_at(p, end) == '!' && !newline_at(p, end)) end++;
+    else if ((w == SKIM_KW_AS || w == SKIM_KW_SATISFIES) && !newline_at(p, end)) end = skim_type_end(p, end + 1);
+    else break;
+  }
+  return kind_at(p, end) == ',' || kind_at(p, end) == '}' ? end : 0;
 }
 
 static void object_literal(parser_t *p) {
   uint32_t open = p->i;
   uint32_t close = close_of(p, open);
+  bool target = kind_at(p, after_pair(p, open)) == '=';
   p->i++;
   while (p->i < close) {
     uint32_t before = p->i;
@@ -136,10 +144,11 @@ static void object_literal(parser_t *p) {
       skim_parse_function_tail(p);
       break;
     case ':':
-      if (redundant_property_value(p, key)) {
+      if (!target && redundant_property_value(p, key)) {
+        uint32_t end = redundant_property_value(p, key);
         flag(p, key, SKIM_TF_REF);
-        strip(p, p->i, p->i + 2);
-        p->i += 2;
+        strip(p, p->i, end);
+        p->i = end;
         break;
       }
       p->i++;
@@ -180,7 +189,7 @@ void skim_parse_binding(parser_t *p, skim_decl_kind_t decl) {
       uint32_t key = p->i;
       if (kind(p) == '[') skim_parse_list(p, p->i);
       else p->i++;
-      if (kind(p) == ':' && redundant_property_value(p, key)) {
+      if (kind(p) == ':' && redundant_property_value(p, key) == p->i + 2) {
         skim_declare(p, key, decl);
         strip(p, p->i, p->i + 2);
         p->i += 2;
@@ -234,7 +243,7 @@ static operand_t async_operand(parser_t *p, bool consequent) {
     return OPERAND_VALUE;
   }
   if (kind_at(p, next) == SKIM_T_WORD && kind_at(p, next + 1) == SKIM_T_ARROW) {
-    simple_arrow_function(p, next);
+    simple_arrow_function(p, next, consequent);
     return OPERAND_FINAL;
   }
   uint32_t open = next;
@@ -245,7 +254,7 @@ static operand_t async_operand(parser_t *p, bool consequent) {
   if (kind_at(p, open) != '(' || !arrow_follows(p, open, &arrow) || !arrow_accepted(p, open, arrow, consequent))
     return OPERAND_NONE;
   strip(p, next, open);
-  arrow_function(p, open, arrow);
+  arrow_function(p, open, arrow, consequent);
   return OPERAND_FINAL;
 }
 
@@ -282,7 +291,7 @@ static operand_t word_operand(parser_t *p, bool consequent, bool *prefix) {
     break;
   }
   if (kind_at(p, next) == SKIM_T_ARROW) {
-    simple_arrow_function(p, p->i);
+    simple_arrow_function(p, p->i, consequent);
     return OPERAND_FINAL;
   }
   if (!literal_word(w)) flag(p, p->i, SKIM_TF_REF);
@@ -294,7 +303,7 @@ static operand_t paren_operand(parser_t *p, bool consequent) {
   uint32_t open = p->i;
   uint32_t arrow = 0;
   if (arrow_follows(p, open, &arrow) && arrow_accepted(p, open, arrow, consequent)) {
-    arrow_function(p, open, arrow);
+    arrow_function(p, open, arrow, consequent);
     return OPERAND_FINAL;
   }
   p->i++;
@@ -312,11 +321,16 @@ static operand_t angle_operand(parser_t *p, bool consequent, bool *prefix) {
     p->i++;
     return OPERAND_NONE;
   }
+  uint32_t before = start;
+  while (before > 0 && p->t[before - 1].flags & SKIM_TF_STRIP && !(p->t[before].flags & SKIM_TF_LEAD))
+    before--;
+  bool leading = before == 0 || kind_at(p, before - 1) == SKIM_T_ARROW || p->t[before].flags & SKIM_TF_LEAD;
+  if (kind_at(p, end) == '{' && leading) flag(p, end, SKIM_TF_PAREN);
   strip(p, start, end);
   p->i = end;
   if (kind_at(p, end) != '(' || !arrow_follows(p, end, &arrow) || !arrow_accepted(p, end, arrow, consequent))
     return OPERAND_NONE;
-  arrow_function(p, end, arrow);
+  arrow_function(p, end, arrow, consequent);
   return OPERAND_FINAL;
 }
 
@@ -335,6 +349,7 @@ static operand_t operand(parser_t *p, bool consequent) {
       p->i++;
       return OPERAND_VALUE;
     case SKIM_T_TEMPLATE:
+      if (p->src[p->t[p->i].start] != '`') return OPERAND_NONE;
       template_literal(p);
       return OPERAND_VALUE;
     case '(':
@@ -416,7 +431,7 @@ static bool operators(parser_t *p, chain_t chain) {
       skim_parse_list(p, p->i);
       continue;
     case SKIM_T_TEMPLATE:
-      if (chain == CHAIN_DECORATOR) return false;
+      if (chain == CHAIN_DECORATOR || p->src[p->t[p->i].start] != '`') return false;
       template_literal(p);
       continue;
     case '!':
@@ -436,7 +451,7 @@ static bool operators(parser_t *p, chain_t chain) {
         continue;
       }
       if (heritage) return false;
-      p->i++;
+      p->i += kind_at(p, p->i + 1) == '<' && p->t[p->i + 1].start == p->t[p->i].end ? 2 : 1;
       return true;
     case '?':
       if (heritage) return false;

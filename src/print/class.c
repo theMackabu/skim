@@ -58,6 +58,7 @@ uint32_t skim_print_constructor(skim_printer_t *pr, const skim_node_t *node) {
   uint32_t insert = super_end ? super_end : directives_end(pr, node->first + 1, close);
   skim_print_range(pr, node->first, insert);
   skim_print_flush(pr);
+  if (super_end && pr->t[super_end - 1].kind != ';') put(pr, ";");
   for (uint32_t entry = node->constructor.properties; entry; entry = pr->ast->links[entry + 1]) {
     skim_print_line(pr, super_end || insert == close ? node->first + 1 : insert);
     put(pr, "this.");

@@ -55,8 +55,6 @@ void skim_print_string(skim_printer_t *pr, uint32_t token) {
     }
     if (src[i] == '\n' || src[i] == '\r') {
       i += src[i] == '\r' && i + 1 < end && src[i + 1] == '\n' ? 2 : 1;
-      while (i < end && (src[i] == ' ' || src[i] == '\t'))
-        i++;
       continue;
     }
     size_t null_end = null_escape_end(src, i, end);

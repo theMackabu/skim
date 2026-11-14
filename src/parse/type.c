@@ -3,6 +3,7 @@
 constexpr uint32_t MAX_TYPE_DEPTH = 400;
 
 static thread_local uint32_t type_depth;
+static thread_local bool in_extends;
 
 static uint32_t type_operand(const parser_t *p, uint32_t i);
 static uint32_t type_primary_end(const parser_t *p, uint32_t i);
@@ -28,9 +29,36 @@ static uint32_t template_end(const parser_t *p, uint32_t i) {
   return i < p->count ? i + 1 : p->count;
 }
 
+static bool parameter_list(const parser_t *p, uint32_t open) {
+  uint32_t first = open + 1;
+  switch (kind_at(p, first)) {
+  case ')':
+  case SKIM_T_SPREAD:
+    return true;
+  case '{':
+  case '[':
+    first = after_pair(p, first);
+    break;
+  case SKIM_T_WORD:
+    first++;
+    break;
+  default:
+    return false;
+  }
+  switch (kind_at(p, first)) {
+  case ':':
+  case ',':
+  case '?':
+  case '=':
+    return true;
+  default:
+    return kind_at(p, first) == ')' && kind_at(p, first + 1) == SKIM_T_ARROW;
+  }
+}
+
 static uint32_t function_type_end(const parser_t *p, uint32_t open) {
   uint32_t after = after_pair(p, open);
-  if (kind_at(p, after) != SKIM_T_ARROW) return 0;
+  if (kind_at(p, after) != SKIM_T_ARROW || !parameter_list(p, open)) return 0;
   uint32_t end = skim_type_end(p, after + 1);
   return end > after + 1 ? end : after + 1;
 }
@@ -50,7 +78,9 @@ static uint32_t type_union_end(const parser_t *p, uint32_t i) {
 static uint32_t conditional_type_end(const parser_t *p, uint32_t i) {
   uint32_t end = type_union_end(p, i);
   if (end == i || word_at(p, end) != SKIM_KW_EXTENDS) return end;
+  in_extends = true;
   uint32_t constraint = type_union_end(p, end + 1);
+  in_extends = false;
   if (constraint == end + 1 || kind_at(p, constraint) != '?') return end;
   uint32_t when_true = skim_type_end(p, constraint + 1);
   if (when_true == constraint + 1 || kind_at(p, when_true) != ':') return end;
@@ -60,9 +90,12 @@ static uint32_t conditional_type_end(const parser_t *p, uint32_t i) {
 
 uint32_t skim_type_end(const parser_t *p, uint32_t i) {
   if (type_depth >= MAX_TYPE_DEPTH) return i;
+  bool outer_extends = in_extends;
+  in_extends = false;
   type_depth++;
   uint32_t end = conditional_type_end(p, i);
   type_depth--;
+  in_extends = outer_extends;
   return end;
 }
 
@@ -87,8 +120,9 @@ static uint32_t type_word_end(const parser_t *p, uint32_t i) {
     if (kind_at(p, next) != SKIM_T_WORD) break;
     next++;
     if (word_at(p, next) == SKIM_KW_EXTENDS) {
+      bool required = in_extends;
       uint32_t end = type_union_end(p, next + 1);
-      if (end > next + 1 && kind_at(p, end) != '?') return end;
+      if (end > next + 1 && (required || kind_at(p, end) != '?')) return end;
     }
     return next;
   case SKIM_KW_ASSERTS:

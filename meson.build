@@ -1,5 +1,5 @@
 project('skim', 'c',
-  version: '0.2.0-rc.1',
+  version: '0.2.0-rc.2',
   license: 'MIT',
   default_options: [
     'buildtype=release',

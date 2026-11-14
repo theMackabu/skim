@@ -74,6 +74,7 @@ static bool index_signature(parser_t *p, uint32_t start) {
 static void class_member(parser_t *p) {
   uint32_t start = p->i;
   member_modifiers_t modifiers = {0};
+  flag(p, start, SKIM_TF_LEAD);
   skim_parse_decorators(p);
   member_modifiers(p, &modifiers);
   if (word(p) == SKIM_KW_STATIC && kind_at(p, p->i + 1) == '{') {

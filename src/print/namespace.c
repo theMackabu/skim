@@ -5,10 +5,19 @@
 
 constexpr uint32_t MAX_PARTS = 32;
 
-static bool param_used(const skim_str_t *params, size_t candidate) {
+static bool param_used(const skim_printer_t *pr, size_t candidate) {
+  const skim_str_t *params = &pr->params;
   const char *name = params->data + candidate;
+  size_t len = params->len - candidate;
   for (size_t at = 0; at < candidate; at += strlen(params->data + at) + 1)
     if (strcmp(params->data + at, name) == 0) return true;
+  for (uint32_t i = 0; i < pr->count; i++) {
+    const skim_token_t *token = &pr->t[i];
+    if (
+      token->kind == SKIM_T_WORD && token->end - token->start == len && memcmp(pr->src + token->start, name, len) == 0
+    )
+      return true;
+  }
   return false;
 }
 
@@ -30,7 +39,7 @@ static uint32_t make_param(skim_printer_t *pr, uint32_t name) {
     skim_str_putn(params, text, base);
     snprintf(digits, sizeof(digits), "%u", suffix);
     if (suffix > 1) skim_str_puts(params, digits);
-    if (!param_used(params, start)) break;
+    if (!param_used(pr, start)) break;
   }
   params->len++;
   return (uint32_t)start + 1;
@@ -46,14 +55,6 @@ void skim_print_alias(skim_printer_t *pr, uint32_t name) {
   put_token(pr, name);
   put(pr, " = ");
   put_token(pr, name);
-}
-
-static void terminate_body(skim_printer_t *pr) {
-  size_t end = pr->out->len;
-  while (end > 0 && skim_is_space(pr->out->data[end - 1]))
-    end--;
-  char last = end ? pr->out->data[end - 1] : '{';
-  if (last != ';' && last != '}' && last != '{') put(pr, ";");
 }
 
 static void close_part(skim_printer_t *pr, uint32_t name, uint32_t parent) {
@@ -85,6 +86,7 @@ uint32_t skim_print_namespace(skim_printer_t *pr, const skim_node_t *node) {
   uint32_t parts = 0;
   uint32_t open = node->decl.body;
   uint32_t close = token_close(pr, open);
+  uint32_t anchor = exported && node->first > 0 ? node->first - 1 : node->first;
   pr->exported = false;
 
   skim_print_begin(pr, node->first);
@@ -95,11 +97,14 @@ uint32_t skim_print_namespace(skim_printer_t *pr, const skim_node_t *node) {
       if (parts == 0 && exported && !outer) put(pr, "export ");
       put(pr, "let ");
       put_token(pr, name);
-      put(pr, ";\n");
+      put(pr, ";");
+      skim_print_line(pr, anchor);
     }
+    skim_print_separate(pr);
     put(pr, "(function (");
     put(pr, param_text(pr, params[parts]));
     put(pr, ") {");
+    if (name + 2 < open) skim_print_line(pr, anchor);
     parts++;
   }
 
@@ -107,27 +112,28 @@ uint32_t skim_print_namespace(skim_printer_t *pr, const skim_node_t *node) {
   skim_print_resume(pr, open + 1);
   skim_print_range(pr, open + 1, close);
   skim_print_flush(pr);
-  terminate_body(pr);
+  skim_print_separate(pr);
   skim_print_begin(pr, close);
   pr->param = outer;
 
   for (uint32_t k = parts; k > 0; k--) {
     close_part(pr, names[k - 1], k > 1 ? params[k - 2] : exported ? outer : 0);
-    if (k > 1) put(pr, "\n");
+    if (k > 1) skim_print_line(pr, anchor);
   }
   skim_print_resume(pr, node->end);
   return node->end;
 }
 
 static uint32_t declarator_end(const skim_printer_t *pr, uint32_t from, uint32_t end) {
-  while (from < end && pr->t[from].kind != ',' && pr->t[from].kind != ';') {
+  while (from < end) {
     const skim_token_t *token = &pr->t[from];
     bool template = token->kind == SKIM_T_TEMPLATE && !(token->flags & SKIM_TF_TAIL) && token->pair > from;
     if (token->flags & SKIM_TF_STRIP) from++;
+    else if (token->kind == ',' || token->kind == ';') return from;
     else if (token->kind == '(' || token->kind == '[' || token->kind == '{') from = token_close(pr, from) + 1;
     else from = template ? token->pair : from + 1;
   }
-  return from < end ? from : end;
+  return end;
 }
 
 static uint32_t initializer(const skim_printer_t *pr, uint32_t name, uint32_t end) {

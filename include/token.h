@@ -39,6 +39,9 @@ constexpr uint16_t SKIM_TF_NODE = 1 << 4;
 constexpr uint16_t SKIM_TF_TAIL = 1 << 5;
 constexpr uint16_t SKIM_TF_JOIN = 1 << 6;
 constexpr uint16_t SKIM_TF_VISITED = 1 << 7;
+constexpr uint16_t SKIM_TF_EMPTY = 1 << 8;
+constexpr uint16_t SKIM_TF_LEAD = 1 << 9;
+constexpr uint16_t SKIM_TF_PAREN = 1 << 10;
 
 typedef struct {
   uint32_t start;

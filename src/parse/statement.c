@@ -26,6 +26,13 @@ void skim_parse_block(parser_t *p) {
   skim_scope_pop(p, scope);
 }
 
+static void embedded_statement(parser_t *p) {
+  uint32_t first = p->i;
+  skim_parse_statement(p);
+  bool removed = p->i > first && p->t[first].flags & SKIM_TF_STRIP && p->t[p->i - 1].flags & SKIM_TF_STRIP;
+  if (removed) flag(p, first, SKIM_TF_EMPTY);
+}
+
 static void parenthesized(parser_t *p) {
   if (kind(p) != '(') return;
   uint32_t open = p->i;
@@ -97,7 +104,7 @@ static void for_statement(parser_t *p) {
     }
     leave(p, open);
   }
-  skim_parse_statement(p);
+  embedded_statement(p);
   skim_scope_pop(p, scope);
 }
 
@@ -204,10 +211,42 @@ static bool declare_follows(const parser_t *p) {
   case SKIM_KW_GLOBAL:
   case SKIM_KW_TYPE:
   case SKIM_KW_INTERFACE:
+  case SKIM_KW_IMPORT:
     return true;
   default:
     return false;
   }
+}
+
+static uint32_t ambient_name(const parser_t *p, uint32_t keyword) {
+  uint32_t name = keyword + 1;
+  switch (word_at(p, keyword)) {
+  case SKIM_KW_ABSTRACT:
+  case SKIM_KW_ASYNC:
+    name++;
+    break;
+  case SKIM_KW_CONST:
+    if (word_at(p, name) == SKIM_KW_ENUM) name++;
+    break;
+  case SKIM_KW_LET:
+  case SKIM_KW_VAR:
+  case SKIM_KW_FUNCTION:
+  case SKIM_KW_CLASS:
+  case SKIM_KW_ENUM:
+    break;
+  default:
+    return 0;
+  }
+  if (kind_at(p, name) == '*') name++;
+  return kind_at(p, name) == SKIM_T_WORD ? name : 0;
+}
+
+static void ambient_statement(parser_t *p, uint32_t start) {
+  p->dry++;
+  p->i++;
+  skim_parse_statement(p);
+  p->dry--;
+  strip(p, start, p->i);
 }
 
 static bool namespace_follows(const parser_t *p) {
@@ -263,9 +302,13 @@ static bool word_statement(parser_t *p) {
     skim_parse_namespace(p, start, 0);
     return true;
   case SKIM_KW_GLOBAL:
-    if (!p->dry || kind_at(p, next) != '{') return false;
+    if (kind_at(p, next) != '{' || newline_at(p, next)) return false;
+    p->dry++;
     p->i++;
     skim_parse_block(p);
+    p->dry--;
+    strip(p, start, p->i);
+    p->runtime = true;
     return true;
   case SKIM_KW_TYPE:
     return type_alias(p);
@@ -273,17 +316,14 @@ static bool word_statement(parser_t *p) {
     return interface_declaration(p);
   case SKIM_KW_DECLARE:
     if (!declare_follows(p)) return false;
-    p->dry++;
-    p->i++;
-    skim_parse_statement(p);
-    p->dry--;
-    strip(p, start, p->i);
+    ambient_statement(p, start);
+    if (ambient_name(p, next)) skim_declare(p, ambient_name(p, next), SKIM_D_AMBIENT);
     switch (word_at(p, next)) {
     case SKIM_KW_NAMESPACE:
     case SKIM_KW_MODULE:
-    case SKIM_KW_GLOBAL:
     case SKIM_KW_TYPE:
     case SKIM_KW_INTERFACE:
+    case SKIM_KW_IMPORT:
       break;
     default:
       p->runtime = true;
@@ -300,10 +340,10 @@ static bool word_statement(parser_t *p) {
   case SKIM_KW_IF:
     p->i++;
     parenthesized(p);
-    skim_parse_statement(p);
+    embedded_statement(p);
     if (word(p) == SKIM_KW_ELSE) {
       p->i++;
-      skim_parse_statement(p);
+      embedded_statement(p);
     }
     return true;
   case SKIM_KW_FOR:
@@ -313,11 +353,11 @@ static bool word_statement(parser_t *p) {
   case SKIM_KW_WITH:
     p->i++;
     parenthesized(p);
-    skim_parse_statement(p);
+    embedded_statement(p);
     return true;
   case SKIM_KW_DO:
     p->i++;
-    skim_parse_statement(p);
+    embedded_statement(p);
     if (word(p) == SKIM_KW_WHILE) {
       p->i++;
       parenthesized(p);
@@ -358,6 +398,7 @@ void skim_parse_statement(parser_t *p) {
     return;
   }
   uint32_t first = p->i;
+  flag(p, first, SKIM_TF_LEAD);
   switch (kind(p)) {
   case '{':
     skim_parse_block(p);

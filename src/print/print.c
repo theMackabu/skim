@@ -76,6 +76,10 @@ void skim_print_line(skim_printer_t *pr, uint32_t token) {
   skim_str_putn(pr->out, pr->src + line, indent - line);
 }
 
+static bool opens_operand(char c) {
+  return skim_is_id_part(c) || c == '(' || c == '[' || c == '{' || c == '"' || c == '\'' || c == '`';
+}
+
 static bool glues(const skim_printer_t *pr, uint32_t at) {
   if (pr->out->len == 0 || at >= pr->len) return false;
   char prev = pr->out->data[pr->out->len - 1];
@@ -84,11 +88,37 @@ static bool glues(const skim_printer_t *pr, uint32_t at) {
   return (prev == '+' || prev == '-' || prev == '/' || prev == '<') && next == prev;
 }
 
+void skim_print_separate(skim_printer_t *pr) {
+  size_t end = pr->out->len;
+  while (end > 0 && skim_is_space(pr->out->data[end - 1]))
+    end--;
+  char last = end ? pr->out->data[end - 1] : ';';
+  if (last != ';' && last != '{' && last != '}') skim_str_putc(pr->out, ';');
+}
+
+static bool continues_statement(const skim_printer_t *pr, uint32_t next) {
+  if (next >= pr->count) return false;
+  switch (pr->t[next].kind) {
+  case '(':
+  case '[':
+  case '+':
+  case '-':
+  case '/':
+  case SKIM_T_TEMPLATE:
+  case SKIM_T_REGEX:
+    return true;
+  default:
+    return false;
+  }
+}
+
 static uint32_t skip_stripped(skim_printer_t *pr, uint32_t first, uint32_t to) {
   uint32_t next = first + 1;
-  while (next < to && pr->t[next].flags & SKIM_TF_STRIP)
+  while (next < to && (pr->t[next].flags & (SKIM_TF_STRIP | SKIM_TF_LEAD)) == SKIM_TF_STRIP)
     next++;
   skim_print_flush(pr);
+  if (pr->t[first].flags & SKIM_TF_EMPTY) skim_str_puts(pr->out, " {}");
+  else if (pr->t[first].flags & SKIM_TF_LEAD && continues_statement(pr, next)) skim_print_separate(pr);
   const skim_token_t *resume = &pr->t[next];
   if (pr->t[first].flags & SKIM_TF_NEWLINE) {
     if (resume->flags & SKIM_TF_JOIN) skim_str_putc(pr->out, ' ');
@@ -96,7 +126,8 @@ static uint32_t skip_stripped(skim_printer_t *pr, uint32_t first, uint32_t to) {
     pr->copied = resume->start;
   } else {
     pr->copied = pr->t[next - 1].end;
-    if (glues(pr, pr->copied)) skim_str_putc(pr->out, ' ');
+    bool spaced = pr->t[first].start > pr->kept && pr->copied == resume->start;
+    if (glues(pr, pr->copied) || (spaced && opens_operand(pr->src[pr->copied]))) skim_str_putc(pr->out, ' ');
   }
   pr->kept = pr->copied;
   return next;
@@ -132,7 +163,7 @@ static uint32_t print_node(skim_printer_t *pr, uint32_t i) {
 void skim_print_range(skim_printer_t *pr, uint32_t from, uint32_t to) {
   for (uint32_t i = from; i < to;) {
     const skim_token_t *token = &pr->t[i];
-    if (!(token->flags & (SKIM_TF_STRIP | SKIM_TF_REWRITE | SKIM_TF_NODE))) {
+    if (!(token->flags & (SKIM_TF_STRIP | SKIM_TF_REWRITE | SKIM_TF_NODE | SKIM_TF_PAREN))) {
       pr->kept = token->end;
       i++;
       continue;
@@ -147,6 +178,17 @@ void skim_print_range(skim_printer_t *pr, uint32_t from, uint32_t to) {
     }
     if (token->flags & SKIM_TF_STRIP) {
       i = skip_stripped(pr, i, to);
+      continue;
+    }
+    if (token->flags & SKIM_TF_PAREN) {
+      uint32_t close = token_close(pr, i);
+      pr->t[i].flags &= (uint16_t)~SKIM_TF_PAREN;
+      skim_print_begin(pr, i);
+      skim_str_putc(pr->out, '(');
+      skim_print_range(pr, i, close + 1 < to ? close + 1 : to);
+      skim_print_flush(pr);
+      skim_str_putc(pr->out, ')');
+      i = close + 1 < to ? close + 1 : to;
       continue;
     }
     if (token->flags & SKIM_TF_REWRITE && token->kind == SKIM_T_WORD) {

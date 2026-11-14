@@ -72,6 +72,7 @@ typedef enum : uint8_t {
   SKIM_D_NAMESPACE,
   SKIM_D_IMPORT,
   SKIM_D_ALIAS,
+  SKIM_D_AMBIENT,
   SKIM_D_TYPE,
 } skim_decl_kind_t;
 

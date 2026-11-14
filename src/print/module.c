@@ -59,6 +59,16 @@ static void table_type_use(skim_printer_t *pr, const import_table_t *table, uint
   }
 }
 
+static void table_redeclare(skim_printer_t *pr, const import_table_t *table, const skim_decl_t *shadow) {
+  for (uint32_t slot = name_hash(token_text(pr, shadow->token), token_len(pr, shadow->token)) & table->mask;;
+       slot = (slot + 1) & table->mask) {
+    uint32_t entry = table->slots[slot];
+    if (!entry) return;
+    skim_decl_t *decl = &pr->ast->decls[entry - 1];
+    if (decl->scope == shadow->scope && token_equal(pr, decl->token, shadow->token)) decl->typed = true;
+  }
+}
+
 static bool imported(const skim_decl_t *decl) {
   return decl->kind == SKIM_D_IMPORT || decl->kind == SKIM_D_ALIAS;
 }
@@ -96,8 +106,9 @@ static void resolve_imports(skim_printer_t *pr) {
   }
   for (uint32_t i = 0; i < pr->ast->decl_count; i++) {
     const skim_decl_t *decl = &pr->ast->decls[i];
-    if (!imported(decl) && decl->kind != SKIM_D_TYPE && table_has(pr, &table, decl->token))
-      table.shadows[table.shadow_count++] = i;
+    if (imported(decl) || decl->kind == SKIM_D_TYPE || !table_has(pr, &table, decl->token)) continue;
+    table.shadows[table.shadow_count++] = i;
+    table_redeclare(pr, &table, decl);
   }
 
   for (uint32_t i = 0; i < pr->count; i++) {
@@ -262,11 +273,21 @@ uint32_t skim_print_import_equals(skim_printer_t *pr, const skim_node_t *node) {
   return node->end;
 }
 
+static bool names_value(const skim_printer_t *pr, uint32_t name) {
+  bool value = false;
+  bool type = false;
+  for (uint32_t i = 0; i < pr->ast->decl_count; i++) {
+    const skim_decl_t *decl = &pr->ast->decls[i];
+    if (decl->scope != 0 || !token_equal(pr, decl->token, name)) continue;
+    if (decl->kind == SKIM_D_TYPE || decl->kind == SKIM_D_AMBIENT) type = true;
+    else value = true;
+  }
+  return value || !type;
+}
+
 static bool export_specifier_kept(const skim_printer_t *pr, uint32_t from, uint32_t to, bool has_source) {
   if (type_specifier(pr, from, to)) return false;
-  if (has_source) return true;
-  if (skim_print_declared(pr, from, pr->count, false)) return true;
-  return !skim_print_declared(pr, from, pr->count, true);
+  return has_source || names_value(pr, from);
 }
 
 static uint32_t print_named_export(skim_printer_t *pr, const skim_node_t *node) {
@@ -333,6 +354,13 @@ static uint32_t print_decorated_export(skim_printer_t *pr, const skim_node_t *no
   return node->exported.body;
 }
 
+static bool default_export_is_type(const skim_printer_t *pr, const skim_node_t *node) {
+  uint32_t name = node->exported.body;
+  uint32_t end = name + 1 + (pr->t[name + 1].kind == ';');
+  if (node->exported.form != SKIM_EXPORT_DEFAULT || pr->t[name].kind != SKIM_T_WORD || end != node->end) return false;
+  return !names_value(pr, name);
+}
+
 uint32_t skim_print_export(skim_printer_t *pr, const skim_node_t *node) {
   if (pr->param) return skim_print_namespace_export(pr, node);
   if (node->exported.keyword != node->first) return print_decorated_export(pr, node);
@@ -346,6 +374,10 @@ uint32_t skim_print_export(skim_printer_t *pr, const skim_node_t *node) {
     return node->first + 1;
   default:
     break;
+  }
+  if (default_export_is_type(pr, node)) {
+    skim_print_remove(pr, node->first, node->end);
+    return node->first;
   }
   pr->module_syntax = true;
   uint32_t body = node->exported.body;

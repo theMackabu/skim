@@ -146,22 +146,26 @@ static value_t eval_number(eval_t *ev, uint32_t token) {
   return number_value(strtod(clean, NULL));
 }
 
-static value_t eval_string(eval_t *ev, const char *text, uint32_t len) {
-  skim_str_t escaped = {0};
+static void put_escaped(skim_str_t *out, const char *text, uint32_t len) {
   for (uint32_t i = 0; i < len; i++) {
     char c = text[i];
     if (c == '\\' && i + 1 < len) {
       char next = text[++i];
-      if (next != '\'' && next != '`' && next != '$') skim_str_putc(&escaped, '\\');
-      skim_str_putc(&escaped, next);
+      if (next != '\'' && next != '`' && next != '$') skim_str_putc(out, '\\');
+      skim_str_putc(out, next);
     } else if (c == '"') {
-      skim_str_puts(&escaped, "\\\"");
+      skim_str_puts(out, "\\\"");
     } else if (c == '\n') {
-      skim_str_puts(&escaped, "\\n");
+      skim_str_puts(out, "\\n");
     } else if (c != '\r') {
-      skim_str_putc(&escaped, c);
+      skim_str_putc(out, c);
     }
   }
+}
+
+static value_t eval_string(eval_t *ev, const char *text, uint32_t len) {
+  skim_str_t escaped = {0};
+  put_escaped(&escaped, text, len);
   value_t value = string_value(ev->pr, escaped.data ? escaped.data : "", escaped.len);
   free(escaped.data);
   return value;
@@ -361,11 +365,39 @@ static void put_value(skim_printer_t *pr, value_t value) {
 
 static void put_member_name(skim_printer_t *pr, uint32_t name) {
   uint32_t len = token_len(pr, name);
-  const char *text = pr->t[name].kind == SKIM_T_STRING ? string_content(pr, name, &len) : token_text(pr, name);
-  skim_str_putn(pr->out, text, len);
+  if (pr->t[name].kind == SKIM_T_STRING) put_escaped(pr->out, string_content(pr, name, &len), len);
+  else put_token(pr, name);
 }
 
-static void put_initializer(skim_printer_t *pr, uint32_t owner, uint32_t from, uint32_t to) {
+static uint32_t member_end(const skim_printer_t *pr, uint32_t from, uint32_t close) {
+  while (from < close) {
+    const skim_token_t *token = &pr->t[from];
+    bool template = token->kind == SKIM_T_TEMPLATE && !(token->flags & SKIM_TF_TAIL) && token->pair > from;
+    if (token->flags & SKIM_TF_STRIP) from++;
+    else if (token->kind == ',') return from;
+    else if (token->kind == '(' || token->kind == '[' || token->kind == '{') from = token_close(pr, from) + 1;
+    else from = template ? token->pair : from + 1;
+  }
+  return close;
+}
+
+static bool declares_member(const skim_printer_t *pr, const skim_node_t *node, uint32_t token) {
+  uint32_t close = token_close(pr, node->decl.body);
+  for (uint32_t member = node->decl.body + 1; member < close; member = member_end(pr, member, close) + 1)
+    if (name_matches(pr, member, token_text(pr, token), token_len(pr, token))) return true;
+  return find_member(pr, node->decl.name, token_text(pr, token), token_len(pr, token));
+}
+
+static bool template_only(const skim_printer_t *pr, uint32_t from, uint32_t to) {
+  uint32_t piece = from;
+  if (from >= to || pr->t[from].kind != SKIM_T_TEMPLATE) return false;
+  while (!(pr->t[piece].flags & SKIM_TF_TAIL) && pr->t[piece].pair > piece && pr->t[piece].pair < to)
+    piece = pr->t[piece].pair;
+  return pr->t[piece].flags & SKIM_TF_TAIL && piece + 1 == to;
+}
+
+static void put_initializer(skim_printer_t *pr, const skim_node_t *node, uint32_t from, uint32_t to) {
+  uint32_t owner = node->decl.name;
   pr->copied = pr->kept = pr->t[from].start;
   uint32_t segment = from;
   for (uint32_t i = from; i < to; i++) {
@@ -376,7 +408,7 @@ static void put_initializer(skim_printer_t *pr, uint32_t owner, uint32_t from, u
       continue;
     }
     if (token->kind != SKIM_T_WORD || !(token->flags & SKIM_TF_REF) || token->flags & SKIM_TF_STRIP) continue;
-    if (!find_member(pr, owner, token_text(pr, i), token_len(pr, i))) continue;
+    if (!declares_member(pr, node, i)) continue;
     skim_print_range(pr, segment, i);
     skim_print_begin(pr, i);
     put_token(pr, owner);
@@ -385,16 +417,6 @@ static void put_initializer(skim_printer_t *pr, uint32_t owner, uint32_t from, u
   }
   skim_print_range(pr, segment, to);
   skim_print_flush(pr);
-}
-
-static uint32_t member_end(const skim_printer_t *pr, uint32_t from, uint32_t close) {
-  while (from < close && pr->t[from].kind != ',') {
-    uint8_t kind = pr->t[from].kind;
-    bool open = kind == '(' || kind == '[' || kind == '{' ||
-                (kind == SKIM_T_TEMPLATE && !(pr->t[from].flags & SKIM_TF_TAIL) && pr->t[from].pair > from);
-    from = open ? token_close(pr, from) + (kind != SKIM_T_TEMPLATE) : from + 1;
-  }
-  return from < close ? from : close;
 }
 
 static bool drop_empty_enum(skim_printer_t *pr, const skim_node_t *node) {
@@ -406,8 +428,8 @@ static bool drop_empty_enum(skim_printer_t *pr, const skim_node_t *node) {
     while (out->len > 0 && skim_is_space(out->data[out->len - 1]))
       out->len--;
     if (out->len >= 4 && memcmp(out->data + out->len - 4, "else", 4) == 0) out->len -= 4;
-  } else if (pr->t[before].kind == ')') {
-    put(pr, "{}");
+  } else if (pr->t[before].kind == ')' || token_word(pr, before) == SKIM_KW_DO) {
+    put(pr, " {}");
   }
   skim_print_remove(pr, node->first, node->end);
   return true;
@@ -463,9 +485,10 @@ uint32_t skim_print_enum(skim_printer_t *pr, const skim_node_t *node) {
     if (initialized && !token_equal(pr, member, name)) value = evaluate(pr, name, member + 2, end);
     else if (!initialized && previous.kind == VALUE_NUMBER) value = number_value(previous.number + 1);
 
+    bool string = value.kind == VALUE_STRING || (initialized && template_only(pr, member + 2, end));
     put(pr, "  ");
     put_token(pr, name);
-    if (value.kind != VALUE_STRING) {
+    if (!string) {
       put(pr, "[");
       put_token(pr, name);
     }
@@ -475,7 +498,7 @@ uint32_t skim_print_enum(skim_printer_t *pr, const skim_node_t *node) {
     if (value.kind != VALUE_UNKNOWN) {
       put_value(pr, value);
     } else if (initialized) {
-      put_initializer(pr, name, member + 2, end);
+      put_initializer(pr, node, member + 2, end);
     } else {
       put(pr, "1 + ");
       put_token(pr, name);
@@ -483,7 +506,7 @@ uint32_t skim_print_enum(skim_printer_t *pr, const skim_node_t *node) {
       put_member_name(pr, previous_name);
       put(pr, "\"]");
     }
-    if (value.kind != VALUE_STRING) {
+    if (!string) {
       put(pr, "] = \"");
       put_member_name(pr, member);
       put(pr, "\"");

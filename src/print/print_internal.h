@@ -50,6 +50,7 @@ void skim_print_resume(skim_printer_t *pr, uint32_t token);
 void skim_print_line(skim_printer_t *pr, uint32_t token);
 void skim_print_remove(skim_printer_t *pr, uint32_t from, uint32_t to);
 void skim_print_alias(skim_printer_t *pr, uint32_t name);
+void skim_print_separate(skim_printer_t *pr);
 
 skim_decl_t *skim_print_decl(const skim_printer_t *pr, uint32_t token);
 const skim_node_t *skim_print_node(const skim_printer_t *pr, uint32_t token);

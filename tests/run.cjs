@@ -44,6 +44,7 @@ const cases = [
   ['namespace.ts', '7\n'],
   ['namespace_exports.ts', '11 hi\n'],
   ['namespace_export_vars.ts', '1 1 undefined 2 3,4 5 6 7 8 9 10 11 11\n'],
+  ['embedded_and_enums.ts', '11 4 2 17 undefined 2 7 1 9\n3 4 4 5 11 x11y 2 function 12 2\n'],
   ['non_null_optional.ts', 'yes 5\n'],
   ['object_property_modifier.ts', 'a.ts:true false 1 true\n'],
   ['parameter_property.ts', '9\n'],
@@ -58,6 +59,8 @@ const exactCases = [
   ['type T = 1;\nexport { T };\n', 'export {};\n'],
   ['declare module "m" { import y from "z"; export interface I {} }\n', ''],
   ['export = 1;\n', 'module.exports = 1;\n'],
+  ['import { a } from "m";\nfunction a() {}\na();\n', 'function a() {}\na();\nexport {};\n'],
+  ['while (x) type T = 1;\ny();\n', 'while (x) {}\ny();\n'],
   ['enum E { A = 1 << 31, B = 1 << 32, C = 1e10 | 0, D = ~4294967296 }\nE;\n',
     'var E = function(E) {\n  E[E["A"] = -2147483648] = "A";\n  E[E["B"] = 1] = "B";\n  E[E["C"] = 1410065408] = "C";\n  E[E["D"] = -1] = "D";\n  return E;\n}(E || {});\nE;\n']
 ];
