@@ -31,3 +31,13 @@ declare const never: number;
 (function () { n++; })()
 namespace Tail { export const sum = <T extends number>(v: T) => v + 1; }
 console.log(wrap().k, text.length, new Derived(4).w, Quoted['q"r'], parts.n, parts.t, parts.last, typeof pick, n, Tail.sum(1));
+
+class Fields {
+  set: Set<number>
+  size: number = 2
+  ratio() { return (this.size! / 4) + (n < 0 || n >= 12 ? 1 : 0); }
+}
+console.log(new Fields().ratio(), Object.keys(new Fields()).join());
+
+const nul = "a\x003";
+console.log(nul.length, nul.charCodeAt(2));

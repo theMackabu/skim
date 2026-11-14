@@ -257,6 +257,7 @@ bool skim_type_arguments_end(const parser_t *p, uint32_t i, uint32_t *end) {
   uint32_t after = skim_angle_end(p, i);
   if (!after) return false;
   uint8_t next = kind_at(p, after);
+  if ((next == '=' || next == '>') && p->t[after].start == p->t[after - 1].end) return false;
   bool follows = next == '(' || next == SKIM_T_TEMPLATE;
   if (!follows && next != '<' && next != '>' && next != '+' && next != '-')
     follows = newline_at(p, after) || !starts_expression(p, after);

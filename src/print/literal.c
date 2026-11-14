@@ -1,3 +1,4 @@
+#include "chars.h"
 #include "print_internal.h"
 
 void skim_print_number(skim_printer_t *pr, uint32_t token) {
@@ -58,7 +59,7 @@ void skim_print_string(skim_printer_t *pr, uint32_t token) {
       continue;
     }
     size_t null_end = null_escape_end(src, i, end);
-    if (null_end) {
+    if (null_end && !(null_end < end && skim_is_digit(src[null_end]))) {
       skim_str_puts(out, "\\0");
       i = null_end;
       continue;

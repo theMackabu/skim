@@ -69,9 +69,7 @@ static void print_result(const char *label, size_t bytes, sample_t best) {
   double mb_per_s = best.nanos ? (double)bytes * 1000.0 / (double)best.nanos : 0;
   printf("%-32s %9zu B %10.3f ms %9.1f MB/s", label, bytes, (double)best.nanos / 1e6, mb_per_s);
   if (BENCH_HAS_COUNTERS && bytes) {
-    printf(
-      " %8.1f ins/B %7.1f cyc/B", (double)best.instructions / (double)bytes, (double)best.cycles / (double)bytes
-    );
+    printf(" %8.1f ins/B %7.1f cyc/B", (double)best.instructions / (double)bytes, (double)best.cycles / (double)bytes);
   }
   putchar('\n');
 }

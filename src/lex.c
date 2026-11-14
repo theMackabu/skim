@@ -85,30 +85,35 @@ static void push_open(lexer_t *lx, uint32_t index) {
   tokens->stack[lx->depth++] = index;
 }
 
-static bool regex_allowed(const lexer_t *lx) {
-  const skim_tokens_t *tokens = lx->tokens;
-  if (tokens->count == 0) return true;
-  const skim_token_t *prev = &tokens->items[tokens->count - 1];
-  switch (prev->kind) {
-  case SKIM_T_WORD: {
-    if (!skim_keyword_attrs[prev->word]) return false;
-    if (tokens->count < 2) return true;
-    uint8_t before = tokens->items[tokens->count - 2].kind;
-    return before != '.' && before != SKIM_T_CHAIN;
-  }
+static bool ends_operand(const skim_tokens_t *tokens, uint32_t index) {
+  const skim_token_t *token = &tokens->items[index];
+  switch (token->kind) {
+  case SKIM_T_WORD:
+    if (!skim_keyword_attrs[token->word] || index == 0) return true;
+    return tokens->items[index - 1].kind == '.' || tokens->items[index - 1].kind == SKIM_T_CHAIN;
+  case SKIM_T_TEMPLATE:
+    return token->flags & SKIM_TF_TAIL;
   case SKIM_T_PRIVATE:
   case SKIM_T_NUMBER:
   case SKIM_T_STRING:
-  case SKIM_T_TEMPLATE:
   case SKIM_T_REGEX:
   case SKIM_T_INCDEC:
   case ')':
   case ']':
   case '}':
-    return false;
-  default:
     return true;
+  default:
+    return false;
   }
+}
+
+static bool regex_allowed(const lexer_t *lx) {
+  const skim_tokens_t *tokens = lx->tokens;
+  if (tokens->count == 0) return true;
+  uint32_t last = tokens->count - 1;
+  bool non_null =
+    tokens->items[last].kind == '!' && last > 0 && tokens->items[last].start == tokens->items[last - 1].end;
+  return !ends_operand(tokens, non_null ? last - 1 : last);
 }
 
 static size_t scan_string(const char *src, size_t len, size_t i, uint16_t *flags) {

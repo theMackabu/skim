@@ -70,11 +70,33 @@ uint32_t skim_print_constructor(skim_printer_t *pr, const skim_node_t *node) {
   return insert;
 }
 
+static bool field_needs_semicolon(const skim_printer_t *pr, const skim_node_t *node) {
+  if (node->field.value || pr->t[node->end - 1].kind == ';') return false;
+  switch (token_word(pr, node->field.key)) {
+  case SKIM_KW_GET:
+  case SKIM_KW_SET:
+  case SKIM_KW_STATIC:
+  case SKIM_KW_ASYNC:
+  case SKIM_KW_ACCESSOR:
+    return true;
+  default:
+    break;
+  }
+  uint8_t next = pr->t[node->end].kind;
+  return next == '[' || next == '(' || next == '*';
+}
+
 uint32_t skim_print_field(skim_printer_t *pr, const skim_node_t *node) {
   const skim_options_t *options = pr->options;
-  if (!options->remove_class_fields_without_initializer && !options->allow_declare_fields_false) return node->first;
   bool initialized = node->field.value || pr->t[node->field.key].kind == SKIM_T_PRIVATE;
-  if (initialized && !(node->flags & SKIM_NF_ACCESSOR)) return node->first;
-  skim_print_remove(pr, node->first, node->end);
-  return node->first;
+  bool removable = options->remove_class_fields_without_initializer || options->allow_declare_fields_false;
+  if (removable && (!initialized || node->flags & SKIM_NF_ACCESSOR)) {
+    skim_print_remove(pr, node->first, node->end);
+    return node->first;
+  }
+  if (!field_needs_semicolon(pr, node)) return node->first;
+  skim_print_range(pr, node->first, node->end);
+  skim_print_flush(pr);
+  put(pr, ";");
+  return node->end;
 }

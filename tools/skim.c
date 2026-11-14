@@ -175,9 +175,7 @@ int main(int argc, char **argv) {
   }
 
   const char *out = skim_strip_typescript_borrowed(
-    &ctx, src, len, args.path, 
-    SKIM_SOURCE_AUTO, &args.options, 
-    &out_len, &error, error_buf, sizeof(error_buf)
+    &ctx, src, len, args.path, SKIM_SOURCE_AUTO, &args.options, &out_len, &error, error_buf, sizeof(error_buf)
   );
 
   if (!out) {

@@ -44,7 +44,7 @@ const cases = [
   ['namespace.ts', '7\n'],
   ['namespace_exports.ts', '11 hi\n'],
   ['namespace_export_vars.ts', '1 1 undefined 2 3,4 5 6 7 8 9 10 11 11\n'],
-  ['embedded_and_enums.ts', '11 4 2 17 undefined 2 7 1 9\n3 4 4 5 11 x11y 2 function 12 2\n'],
+  ['embedded_and_enums.ts', '11 4 2 17 undefined 2 7 1 9\n3 4 4 5 11 x11y 2 function 12 2\n1.5 set,size\n3 51\n'],
   ['non_null_optional.ts', 'yes 5\n'],
   ['object_property_modifier.ts', 'a.ts:true false 1 true\n'],
   ['parameter_property.ts', '9\n'],
